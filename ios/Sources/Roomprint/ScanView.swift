@@ -9,6 +9,8 @@ final class ScanController: NSObject, ObservableObject, @preconcurrency RoomCapt
     enum Phase { case scanning, processing, reviewing, failed(String) }
 
     let captureView = RoomCaptureView(frame: .zero)
+    /// Films the whole scan (camera + microphone), across every room.
+    private(set) lazy var recorder = WalkRecorder(session: captureView.captureSession.arSession)
     @Published var phase: Phase = .scanning
     @Published private(set) var rooms: [CapturedRoom] = []
     private(set) var names: [String?] = []
@@ -25,6 +27,7 @@ final class ScanController: NSObject, ObservableObject, @preconcurrency RoomCapt
     func startRoom() {
         phase = .scanning
         captureView.captureSession.run(configuration: RoomCaptureSession.Configuration())
+        recorder.start()  // no-op after the first room: one video for the whole walk
     }
 
     func finishRoom() {
@@ -40,6 +43,12 @@ final class ScanController: NSObject, ObservableObject, @preconcurrency RoomCapt
 
     func stopAll() {
         captureView.captureSession.stop()
+        Task { _ = await recorder.finish() }
+    }
+
+    /// The video of the walk, with sound; call before build() stops the AR session.
+    func finishVideo() async -> URL? {
+        await recorder.finish()
     }
 
     func build() async throws -> CapturedStructure {
@@ -113,7 +122,8 @@ struct ScanView: View {
     @ViewBuilder private var controls: some View {
         switch ctl.phase {
         case .scanning:
-            Text(ctl.rooms.isEmpty ? "Walk slowly along the walls. Point at doors and windows."
+            Label("Filming with sound", systemImage: "record.circle").font(.caption).foregroundStyle(.red)
+            Text(ctl.rooms.isEmpty ? "Walk slowly along the walls. Point at doors and windows. Say the room's name."
                  : "Room \(ctl.rooms.count + 1): go on into the next room.")
                 .font(.callout).multilineTextAlignment(.center)
             Button("Done with this room") { ctl.finishRoom() }
@@ -144,6 +154,8 @@ struct ScanView: View {
 
     private func upload() async {
         do {
+            uploadStep = "Saving the video…"
+            let video = await ctl.finishVideo()
             uploadStep = "Joining the rooms…"
             let structure = try await ctl.build()
             let stamp = Int(Date().timeIntervalSince1970)
@@ -162,6 +174,12 @@ struct ScanView: View {
             uploadStep = "Uploading the floor plan…"
             try await API.upload(space, file: jsonURL, filename: jsonURL.lastPathComponent) { p in
                 Task { @MainActor in uploadProgress = p }
+            }
+            if let video {
+                uploadStep = "Uploading the video…"
+                try await API.upload(space, file: video, filename: video.lastPathComponent) { p in
+                    Task { @MainActor in uploadProgress = p }
+                }
             }
             uploadStep = "Starting…"
             try await API.submit(space)

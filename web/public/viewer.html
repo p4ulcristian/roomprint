@@ -19,6 +19,7 @@
   <div class="tabs hidden" id="tabs">
     <button data-tab="3d">3D</button>
     <button data-tab="plan">Blueprint</button>
+    <button data-tab="video" id="videoTab">Video</button>
     <button data-tab="files">Files</button>
   </div>
   <div class="tools hidden" id="tools3d">
@@ -43,6 +44,10 @@
   <div class="pane hidden" id="three"></div>
   <div class="info hidden" id="info"></div>
   <div class="pane hidden" id="plan"></div>
+  <div class="pane player hidden" id="video">
+    <video id="player" controls playsinline preload="metadata"></video>
+    <div class="vlist hidden" id="vlist"></div>
+  </div>
   <div class="pane files hidden" id="files"></div>
 </main>
 <script type="module" src="/static/viewer.js"></script>
