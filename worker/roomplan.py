@@ -76,6 +76,46 @@ def _hull(pts):
     return np.array(half(pts) + half(pts[::-1]))
 
 
+SPLIT_CELL = 0.02   # m per pixel when cutting a floor along its walls
+MIN_ROOM = 1.0      # m2; smaller pieces (wall stubs, alcoves) join their neighbour
+
+
+def split_floor(poly, segs):
+    """Cut a floor outline along the wall segments into rooms. Each piece grows back over
+    the wall lines to the nearest piece, so neighbouring rooms meet at the wall centre."""
+    import cv2
+    from scipy import ndimage
+    lo = poly.min(0) - 0.1
+    size = np.ceil((poly.max(0) + 0.1 - lo) / SPLIT_CELL).astype(int)
+    px = lambda p: np.round((np.asarray(p) - lo) / SPLIT_CELL).astype(np.int32)
+    floor = np.zeros((size[1], size[0]), np.uint8)
+    cv2.fillPoly(floor, [px(poly)], 1)
+    cut = floor.copy()
+    for a, b in segs:
+        cv2.line(cut, tuple(px(a)), tuple(px(b)), 0, thickness=3)
+    lab, n = ndimage.label(cut)
+    areas = ndimage.sum(cut, lab, range(1, n + 1)) * SPLIT_CELL ** 2
+    keep = [k + 1 for k in range(n) if areas[k] >= MIN_ROOM]
+    if len(keep) <= 1:
+        return [poly]
+    lab = np.where(np.isin(lab, keep), lab, 0)
+    # every other floor pixel (wall lines, small pieces) takes its nearest room's label
+    _, (iy, ix) = ndimage.distance_transform_edt(lab == 0, return_indices=True)
+    lab = np.where(floor > 0, lab[iy, ix], 0)
+    out = []
+    for k in keep:
+        cs, _ = cv2.findContours((lab == k).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        c = max(cs, key=cv2.contourArea)
+        c = cv2.approxPolyDP(c, 0.05 / SPLIT_CELL, True)[:, 0, :] * SPLIT_CELL + lo
+        if len(c) >= 3:
+            # the plan is already turned to the axes: square off jogs where wall stubs end
+            from layout import straighten
+            if _signed_area(c) < 0:
+                c = c[::-1]
+            out.append(straighten(c, snap_deg=25, merge=0.1, min_edge=0.25))
+    return out or [poly]
+
+
 def convert(scan: dict, names: list[str | None] | None = None) -> dict:
     walls_in = scan.get("walls", [])
 
@@ -94,20 +134,35 @@ def convert(scan: dict, names: list[str | None] | None = None) -> dict:
 
     floor_y = min((_m(w["transform"])[1, 3] - w["dimensions"][1] / 2 for w in walls_in), default=0.0)
 
-    # ---- rooms: the floor outline of each scanned room ----
+    # ---- rooms: each scanned floor, split along the walls that cross it ----
+    # One continuous walk through a flat comes back as a single RoomPlan room whose
+    # sections say which parts are the kitchen, bathroom, ...; the inner walls cut it.
+    segs = []
+    for w in walls_in:
+        M = _m(w["transform"])
+        c, u = plan(M[:3, 3]), axis(M)
+        segs.append((c - u * w["dimensions"][0] / 2, c + u * w["dimensions"][0] / 2))
     rooms = []
     for i, r in enumerate(scan.get("rooms", [])):
         pts = np.array([plan(p) for p in r.get("floor") or []])
         if len(pts) < 3:
             continue
-        if _signed_area(pts) < 0:
-            pts = pts[::-1]
-        name = r.get("name") or (names[i] if names and i < len(names) else None)
-        if not name:
-            labels = [SECTION_NAMES.get(s["label"]) for s in r.get("sections", [])
-                      if _inside(plan(s["center"]), pts)]
-            name = next((l for l in labels if l), None)
-        rooms.append({"id": f"r{len(rooms) + 1}", "name": name or f"Room {len(rooms) + 1}", "poly": pts})
+        given = r.get("name") or (names[i] if names and i < len(names) else None)
+        sections = [(plan(sec["center"]), SECTION_NAMES.get(sec["label"])) for sec in r.get("sections", [])]
+        parts = split_floor(pts, segs)
+        for poly in parts:
+            if _signed_area(poly) < 0:
+                poly = poly[::-1]
+            labels = [l for c, l in sections if l and _inside(c, poly)]
+            name = given if given and len(parts) == 1 else (labels[0] if labels else None)
+            rooms.append({"id": f"r{len(rooms) + 1}", "name": name, "poly": poly})
+    taken = {}
+    for r in rooms:  # unnamed parts get numbers; repeated labels get "Bedroom 2"
+        if not r["name"]:
+            r["name"] = f"Room {r['id'][1:]}"
+        taken[r["name"]] = taken.get(r["name"], 0) + 1
+        if taken[r["name"]] > 1:
+            r["name"] = f"{r['name']} {taken[r['name']]}"
 
     if not rooms and walls_in:
         # no floor outline came through: one room around all the walls
