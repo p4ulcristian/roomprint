@@ -28,7 +28,7 @@ async function load() {
   $("statusBox").classList.add("hidden");
   $("tabs").classList.remove("hidden");
   $("pointsChip").classList.toggle("hidden", !summary.has_preview);
-  show(location.hash === "#plan" ? "plan" : "3d");
+  show({ "#plan": "plan", "#files": "files" }[location.hash] ?? "3d");
 }
 
 function showStatus() {
@@ -48,10 +48,11 @@ function showError(e) {
 
 async function show(name) {
   tab = name;
-  history.replaceState(null, "", name === "plan" ? "#plan" : "#3d");
+  history.replaceState(null, "", "#" + name);
   for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("on", b.dataset.tab === name);
   $("three").classList.toggle("hidden", name !== "3d");
   $("plan").classList.toggle("hidden", name !== "plan");
+  $("files").classList.toggle("hidden", name !== "files");
   $("tools3d").classList.toggle("hidden", name !== "3d");
   $("toolsPlan").classList.toggle("hidden", name !== "plan");
   $("info").classList.add("hidden");
@@ -59,6 +60,9 @@ async function show(name) {
   if (name === "plan") {
     view3d?.setActive(false);
     drawPlan();
+  } else if (name === "files") {
+    view3d?.setActive(false);
+    drawFiles();
   } else {
     if (!view3d) {
       try {
@@ -72,6 +76,28 @@ async function show(name) {
     }
     if (tab === "3d") view3d.setActive(true);
   }
+}
+
+// Everything uploaded to this space: videos play here, a scan's USDZ opens in AR
+// Quick Look on an iPhone (rel="ar" needs an <img> child), the rest downloads.
+const VIDEO = /\.(mov|mp4|m4v|webm|3gp|mkv)$/i;
+function drawFiles() {
+  const box = $("files");
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const size = b => b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1e3))} kB`;
+  const when = t => new Date(t).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  const items = [...summary.clips].reverse().map(c => {
+    const url = `${API}/clips/${c.id}/file`;
+    const head = `<div class="fhead"><strong>${esc(c.room_name || c.filename)}</strong><span class="muted small">${size(c.bytes)} · ${when(c.uploaded)}</span></div>`;
+    if (VIDEO.test(c.filename))
+      return `<section class="card">${head}<video controls playsinline preload="metadata" src="${url}"></video></section>`;
+    if (/\.usdz$/i.test(c.filename))
+      return `<section class="card">${head}<p class="muted small">The scanned 3D model. On an iPhone it opens in AR, at real size in your room.</p>
+        <a rel="ar" class="btn secondary" href="${url}"><img alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="1" height="1">Open the 3D model</a></section>`;
+    const what = /\.roomplan$/i.test(c.filename) ? "LiDAR scan data (JSON)" : "Uploaded file";
+    return `<section class="card">${head}<p class="muted small">${what}</p><a class="btn secondary" href="${url}" download="${esc(c.filename)}">Download</a></section>`;
+  });
+  box.innerHTML = `<div class="wrap">${items.join("") || '<p class="muted">Nothing uploaded yet.</p>'}</div>`;
 }
 
 function showRoomInfo(info) {

@@ -10,6 +10,7 @@
 //          GET    /api/s/<token>/clips/<clip>        {id, received, bytes, complete}
 //          PUT    /api/s/<token>/clips/<clip>?offset=N   raw chunk body -> {received, complete}
 //          DELETE /api/s/<token>/clips/<clip>
+//          GET    /api/s/<token>/clips/<clip>/file   the uploaded file (Range requests, for video)
 //          POST   /api/s/<token>/submit              -> status queued
 //          GET    /api/s/<token>/status | space.json | preview.ply
 import { join, extname } from "path";
@@ -154,6 +155,40 @@ function deleteClip(meta: Meta, clip: string): Response {
   return json({ ok: true });
 }
 
+const FILE_TYPES: Record<string, string> = {
+  // .mov from iPhones is H.264/HEVC in QuickTime; browsers play it when told it is MP4
+  mov: "video/mp4", mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", "3gp": "video/3gpp", mkv: "video/x-matroska",
+  usdz: "model/vnd.usdz+zip", glb: "model/gltf-binary", gltf: "model/gltf+json", obj: "text/plain",
+  ply: "application/octet-stream", zip: "application/zip", roomplan: "application/json",
+};
+
+function clipFile(meta: Meta, clip: string, req: Request): Response {
+  const c = readJson<Clip>(join(spaceDir(meta.id), "uploads", `${clip}.json`));
+  if (!c) return err("no such clip", 404);
+  const ext = extname(c.filename).slice(1).toLowerCase();
+  const path = join(spaceDir(meta.id), "uploads", `${clip}.${ext}`);
+  if (!existsSync(path)) return err("no such clip", 404);
+  const file = Bun.file(path);
+  const size = file.size;
+  const headers: Record<string, string> = {
+    "content-type": FILE_TYPES[ext] ?? "application/octet-stream",
+    "accept-ranges": "bytes",
+    "cache-control": "private, max-age=3600",
+    "content-disposition": `inline; filename="${c.filename.replace(/[^\w.-]/g, "_")}"`,
+  };
+  const range = req.headers.get("range")?.match(/^bytes=(\d*)-(\d*)$/);
+  if (range && (range[1] || range[2])) {
+    let start = range[1] ? Number(range[1]) : size - Number(range[2]);
+    let end = range[1] && range[2] ? Number(range[2]) : size - 1;
+    start = Math.max(0, start); end = Math.min(size - 1, end);
+    if (start > end) return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
+    return new Response(file.slice(start, end + 1), {
+      status: 206, headers: { ...headers, "content-range": `bytes ${start}-${end}/${size}`, "content-length": String(end - start + 1) },
+    });
+  }
+  return new Response(file, { headers: { ...headers, "content-length": String(size) } });
+}
+
 async function updateMeta(meta: Meta, req: Request): Promise<Response> {
   if (LOCKED.has(getStatus(meta.id).state)) return err("space is being processed", 409);
   const body = await req.json().catch(() => ({}));
@@ -223,6 +258,9 @@ async function handle(req: Request): Promise<Response> {
   if (sub === "/space.json" && m === "GET") return spaceFile(meta, "space.json", "application/json");
   if (sub === "/preview.ply" && m === "GET") return spaceFile(meta, "preview.ply", "application/octet-stream");
   if (sub === "/clips" && m === "POST") return createClip(meta, req);
+
+  const f = sub.match(/^\/clips\/([\w-]+)\/file$/);
+  if (f && validClip(f[1]) && m === "GET") return clipFile(meta, f[1], req);
 
   const c = sub.match(/^\/clips\/([\w-]+)$/);
   if (c && validClip(c[1])) {
