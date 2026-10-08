@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Roomprint viewer</title>
+<link rel="stylesheet" href="/static/style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
+</head>
+<body class="viewer">
+<header class="vbar">
+  <h1 id="title">Roomprint</h1>
+  <div class="tabs hidden" id="tabs">
+    <button data-tab="3d">3D</button>
+    <button data-tab="plan">Blueprint</button>
+  </div>
+  <div class="tools hidden" id="tools3d">
+    <label class="chip"><input type="checkbox" id="cutaway" checked> Cut-away</label>
+    <label class="chip hidden" id="pointsChip"><input type="checkbox" id="points"> Point cloud</label>
+    <button class="secondary" id="resetBtn">Reset view</button>
+  </div>
+  <div class="tools hidden" id="toolsPlan">
+    <label class="chip"><input type="checkbox" id="furn" checked> Furniture</label>
+    <button class="secondary" id="printBtn">Print</button>
+    <button class="secondary" id="svgBtn">Download SVG</button>
+  </div>
+</header>
+<main class="stage">
+  <div class="statusbox" id="statusBox">
+    <div class="card">
+      <div class="status"><span class="dot" id="dot"></span><div><strong id="stateText">Loading…</strong><div class="muted small" id="stepText"></div></div></div>
+      <div class="bar hidden" id="statusBar"><i></i></div>
+      <p style="margin-top:12px"><a class="btn secondary wide" id="uploadLink" href="#">Go to the upload page</a></p>
+    </div>
+  </div>
+  <div class="pane hidden" id="three"></div>
+  <div class="info hidden" id="info"></div>
+  <div class="pane hidden" id="plan"></div>
+</main>
+<script type="module" src="/static/viewer.js"></script>
+</body>
+</html>

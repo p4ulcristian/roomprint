@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Roomprint upload</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="wrap">
+  <div class="brand">Roomprint</div>
+  <h1 id="title">Film your rooms</h1>
+  <p class="muted">Upload a video of your rooms and we turn it into a floor plan and a 3D model.</p>
+
+  <section class="card" id="statusCard">
+    <div class="status"><span class="dot" id="dot"></span><div><strong id="stateText">Loading…</strong><div class="muted small" id="stepText"></div></div></div>
+    <div class="bar hidden" id="statusBar"><i></i></div>
+    <p id="viewLink" class="hidden" style="margin-top:12px"><a class="btn wide" href="#">Open the floor plan and 3D view</a></p>
+  </section>
+
+  <div id="editor" class="hidden">
+    <section class="card">
+      <h2>How to film</h2>
+      <ul class="tips">
+        <li><strong>Best: one continuous walk through all rooms</strong>, without stopping the recording.</li>
+        <li>Turn the lights on and open the curtains.</li>
+        <li>Walk slowly along the walls, phone at chest height, camera pointing into the room.</li>
+        <li>Film every corner, and pan a little up to the ceiling line and down to the floor.</li>
+        <li>When going from room to room, film through the doorway as you walk through.</li>
+        <li>Landscape or portrait both work. Keep moving slowly; no fast turns.</li>
+        <li>Record with the Camera app, then upload from your library: filming straight from this page ("Take Video") gives a much smaller, blurrier video.</li>
+        <li>Have the Roomprint app on a LiDAR iPhone (Pro models)? <a id="appLink" href="#">Scan in the app</a> instead: it measures every wall to the centimetre.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>What are you uploading?</h2>
+      <div class="seg">
+        <label><input type="radio" name="capture" value="walkthrough"> <span>One walkthrough<small>A single video going through all rooms</small></span></label>
+        <label><input type="radio" name="capture" value="per-room"> <span>One clip per room<small>A separate video for each room, with its name</small></span></label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Length of the longest wall</h2>
+      <div class="row"><input type="number" id="wallLen" inputmode="decimal" step="0.01" min="0.3" max="100" placeholder="e.g. 4.85"><span class="unit">m</span></div>
+      <p class="muted small" style="margin-top:8px">Optional, but it makes all measurements much more accurate. Measure one long wall, floor level, corner to corner.</p>
+      <p class="muted small">No tape measure? Put a sheet of A4 paper flat on the floor where it is clearly visible in the video, and mention it below.</p>
+      <input type="text" id="note" placeholder="Note (e.g. A4 sheet on the living room floor)" style="margin-top:6px">
+      <p class="muted small" id="savedNote"></p>
+    </section>
+
+    <section class="card">
+      <h2>Videos</h2>
+      <div id="pickWalk">
+        <button class="wide" id="pickBtn">Choose video</button>
+      </div>
+      <div id="pickRoom" class="hidden">
+        <input type="text" id="roomName" placeholder="Room name (e.g. Kitchen)">
+        <button class="wide" id="pickRoomBtn" style="margin-top:8px">Choose video for this room</button>
+      </div>
+      <input type="file" id="file" class="hidden" accept="video/*,.mov,.mp4,.m4v,.webm,.usdz,.obj,.glb,.gltf,.ply,.zip" multiple>
+      <p class="muted small" style="margin-top:8px">Large videos are fine. The upload continues where it stopped if the connection drops; after a page reload, pick the same file again.</p>
+      <div id="clips" style="margin-top:8px"></div>
+    </section>
+
+    <section class="card">
+      <button class="wide" id="submitBtn" disabled>Send for processing</button>
+      <p class="muted small" id="submitHint" style="margin-top:8px">Upload at least one video first.</p>
+      <p class="err small" id="submitErr"></p>
+    </section>
+  </div>
+</main>
+<script type="module" src="/static/upload.js"></script>
+<script>
+  // roomprint://u/<token> opens this invite in the iOS app
+  document.getElementById("appLink").href = "roomprint://u/" + location.pathname.split("/").filter(Boolean).pop();
+</script>
+</body>
+</html>

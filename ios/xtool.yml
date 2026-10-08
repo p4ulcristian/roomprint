@@ -1,0 +1,5 @@
+version: 1
+product: Roomprint
+bundleID: com.p4ulcristian.roomprint
+infoPath: Info.plist
+iconPath: Icon/AppIcon.png

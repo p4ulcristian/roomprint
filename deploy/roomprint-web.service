@@ -1,0 +1,14 @@
+[Unit]
+Description=Roomprint web app
+
+[Service]
+WorkingDirectory=%h/Work/roomprint
+Environment=PORT=4490
+# DATA_DIR, BASE_URL, TUNNEL_HOST (extra listen address for a reverse proxy) and
+# APP_SECRET (lets the iOS app create spaces, POST /api/spaces) are machine-specific
+EnvironmentFile=%h/.config/roomprint/env
+ExecStart=%h/.local/bin/bun %h/Work/roomprint/web/server.ts
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
