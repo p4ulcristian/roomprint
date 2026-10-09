@@ -9,3 +9,4 @@ huggingface_hub
 Pillow
 # VGGT is installed with --no-deps: its pins would downgrade torch
 # vggt @ git+https://github.com/facebookresearch/vggt
+open3d

@@ -51,6 +51,11 @@ final class ScanController: NSObject, ObservableObject, @preconcurrency RoomCapt
         await recorder.finish()
     }
 
+    /// The LiDAR depth of the walk, for the real 3D model (nil if the phone gave none).
+    func finishDepth() async -> URL? {
+        await recorder.finishDepth()
+    }
+
     func build() async throws -> CapturedStructure {
         captureView.captureSession.stop()
         let builder = StructureBuilder(options: [.beautifyObjects])
@@ -121,7 +126,11 @@ struct ScanView: View {
     @ViewBuilder private var controls: some View {
         switch ctl.phase {
         case .scanning:
-            Label("Filming with sound", systemImage: "record.circle").font(.caption).foregroundStyle(.red)
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                let n = ctl.recorder.depth.count
+                Label(n > 0 ? "Filming with sound · depth \(n)" : "Filming with sound · no depth yet",
+                      systemImage: "record.circle").font(.caption).foregroundStyle(.red)
+            }
             Text(ctl.rooms.isEmpty ? "Walk slowly along the walls. Point at doors and windows. Say the room's name."
                  : "Room \(ctl.rooms.count + 1): go on into the next room.")
                 .font(.callout).multilineTextAlignment(.center)
@@ -159,6 +168,7 @@ struct ScanView: View {
         do {
             uploadStep = "Saving the video…"
             let video = await ctl.finishVideo()
+            let depth = await ctl.finishDepth()
             uploadStep = "Joining the rooms…"
             let structure = try await ctl.build()
             let stamp = Int(Date().timeIntervalSince1970)
@@ -169,7 +179,7 @@ struct ScanView: View {
             let haveUSDZ = (try? structure.export(to: usdzURL)) != nil
 
             uploadStep = "Queueing the uploads…"
-            let files = [jsonURL] + (haveUSDZ ? [usdzURL] : []) + (video.map { [$0] } ?? [])
+            let files = [jsonURL] + (haveUSDZ ? [usdzURL] : []) + [video, depth].compactMap { $0 }
             let space = space
             try await Task.detached {   // copying a long video into chunks takes a moment
                 for f in files { try Uploader.shared.enqueue(space, file: f, filename: f.lastPathComponent) }

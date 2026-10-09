@@ -28,6 +28,7 @@ async function load() {
   $("statusBox").classList.add("hidden");
   $("tabs").classList.remove("hidden");
   $("pointsChip").classList.toggle("hidden", !summary.has_preview);
+  $("meshChip").classList.toggle("hidden", !summary.has_mesh);
   $("videoTab").classList.toggle("hidden", !videos().length);
   show({ "#plan": "plan", "#files": "files", "#video": "video" }[location.hash] ?? "3d");
 }
@@ -73,7 +74,7 @@ async function show(name) {
     if (!view3d) {
       try {
         const { create3D } = await import("./view3d.js");
-        view3d = create3D($("three"), space, { onRoom: showRoomInfo, pointsUrl: `${API}/preview.ply` });
+        view3d = create3D($("three"), space, { onRoom: showRoomInfo, pointsUrl: `${API}/preview.ply`, meshUrl: `${API}/mesh.ply` });
         view3d.setCutaway($("cutaway").checked);
       } catch (e) {
         $("three").innerHTML = `<div class="statusbox"><div class="card err">The 3D view could not start (${e.message}). The Blueprint tab still works.</div></div>`;
@@ -145,6 +146,13 @@ $("points").onchange = async () => {
   cb.disabled = true;
   try { await view3d?.setPoints(cb.checked); }
   catch (e) { cb.checked = false; alert("Could not load the point cloud: " + e.message); }
+  finally { cb.disabled = false; }
+};
+$("mesh").onchange = async () => {
+  const cb = $("mesh");
+  cb.disabled = true;
+  try { await view3d?.setMesh(cb.checked); }
+  catch (e) { cb.checked = false; alert("Could not load the scan: " + e.message); }
   finally { cb.disabled = false; }
 };
 $("furn").onchange = drawPlan;

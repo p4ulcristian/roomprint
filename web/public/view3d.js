@@ -9,7 +9,7 @@ import {
   ROOM_COLORS, FURN_COLORS, hashColor,
 } from "./geom.js";
 
-export function create3D(container, space, { onRoom, pointsUrl } = {}) {
+export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
@@ -68,6 +68,7 @@ export function create3D(container, space, { onRoom, pointsUrl } = {}) {
   ground.position.set(center.x, center.y, -0.02);
   ground.receiveShadow = true;
   scene.add(ground);
+  const fixed = new Set(scene.children);   // lights and ground stay when the real scan shows
 
   // Floors (one per room) + labels
   const floors = [];
@@ -282,6 +283,25 @@ export function create3D(container, space, { onRoom, pointsUrl } = {}) {
     if (points) points.visible = on;
   }
 
+  // ---------- real scan: the mesh fused from the LiDAR depth (worker/fuse.py) ----------
+  // Shown instead of the drawn model; unlit, so the colours are the camera's own. Only the
+  // side facing into the rooms is drawn, so from outside the near walls and the ceiling
+  // vanish like a dollhouse.
+  let real = null, realLoading = null;
+  async function setMesh(on) {
+    if (on && !real) {
+      realLoading ??= new PLYLoader().loadAsync(meshUrl).then(geo => {
+        real = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: !!geo.getAttribute("color"), side: THREE.FrontSide }));
+        scene.add(real);
+        fixed.add(real);
+        return real;
+      }).finally(() => { realLoading = null; });
+      await realLoading;
+    }
+    if (real) real.visible = on;
+    for (const o of scene.children) if (!fixed.has(o) && o !== points) o.visible = !on;
+  }
+
   // ---------- loop ----------
   function resize() {
     const w = container.clientWidth, h = container.clientHeight;
@@ -308,6 +328,7 @@ export function create3D(container, space, { onRoom, pointsUrl } = {}) {
     setActive(on) { renderer.setAnimationLoop(on ? frame : null); if (on) resize(); },
     setCutaway(on) { cutaway = on; },
     setPoints,
+    setMesh,
     reset() { focusRoom(null); },
     dispose() { renderer.setAnimationLoop(null); ro.disconnect(); controls.dispose(); renderer.dispose(); container.innerHTML = ""; },
   };

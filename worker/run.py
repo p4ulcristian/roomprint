@@ -2,6 +2,7 @@
 
   python run.py watch              process queued spaces forever (one at a time)
   python run.py process <space_id> process one space now, whatever its state
+  python run.py mesh <space_id>    fuse the space's newest LiDAR depth file again
 
 Reads/writes DATA_DIR/spaces/<id>/ (contract in web/store.ts). The model is loaded
 per job and freed afterwards so the GPU is only held while a job runs. A job only
@@ -201,6 +202,47 @@ def process(space_id: str):
     set_status(d, "done", f"{len(space['rooms'])} rooms", 1.0)
 
 
+def needs_mesh():
+    """Spaces with a LiDAR depth file (.rgbd) newer than their fused model.
+
+    The depth file is the biggest upload and lands after the scan was converted, so the
+    model is its own step: it runs on the CPU and leaves the floor plan alone.
+    """
+    out = []
+    for d in sorted(SPACES.glob("*")):
+        rgbd = sorted((d / "uploads").glob("*.rgbd"), key=lambda p: p.stat().st_mtime)
+        if not rgbd:
+            continue
+        st = read_json(d / "status.json") or {}
+        if st.get("state") != "done" or "lidar_frame" not in (read_json(d / "space.json") or {}):
+            continue
+        newest = rgbd[-1].stat().st_mtime
+        done = [p for p in (d / "mesh.ply", d / "mesh.failed") if p.exists() and p.stat().st_mtime >= newest]
+        if not done:
+            out.append((d.name, rgbd[-1]))
+    return out
+
+
+def build_mesh(space_id: str, rgbd: Path):
+    import fuse
+    d = SPACES / space_id
+    st = read_json(d / "status.json") or {}
+    step = st.get("step", "")
+    tmp = d / "mesh.ply.tmp"
+    try:
+        set_status(d, "processing", "building the 3D model from the depth", 0.1)
+        info = fuse.fuse(rgbd, read_json(d / "space.json")["lidar_frame"], tmp,
+                         progress=lambda p: set_status(d, "processing", "building the 3D model from the depth", p))
+        tmp.replace(d / "mesh.ply")
+        (d / "mesh.failed").unlink(missing_ok=True)
+        print(f"[{space_id}] mesh: {info}", flush=True)
+    except Exception as e:
+        traceback.print_exc()
+        tmp.unlink(missing_ok=True)
+        (d / "mesh.failed").write_text(str(e))
+    set_status(d, "done", step, 1.0)  # the floor plan is unaffected either way
+
+
 def queued():
     out = []
     for d in sorted(SPACES.glob("*")):
@@ -233,6 +275,8 @@ def watch():
             if waiting_note != q[0]:
                 set_status(SPACES / q[0], "queued", f"waiting for the GPU ({free} MB free)", 0)
                 waiting_note = q[0]
+        for space_id, rgbd in needs_mesh():
+            build_mesh(space_id, rgbd)
         time.sleep(10)
 
 
@@ -242,6 +286,9 @@ if __name__ == "__main__":
         watch()
     elif len(sys.argv) == 3 and sys.argv[1] == "process":
         run_one(sys.argv[2])
+    elif len(sys.argv) == 3 and sys.argv[1] == "mesh":
+        rgbd = sorted((SPACES / sys.argv[2] / "uploads").glob("*.rgbd"), key=lambda p: p.stat().st_mtime)
+        build_mesh(sys.argv[2], rgbd[-1]) if rgbd else print("no depth file")
     else:
         print(__doc__)
         sys.exit(2)

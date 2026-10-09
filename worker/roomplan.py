@@ -254,6 +254,10 @@ def convert(scan: dict, names: list[str | None] | None = None) -> dict:
                      "size": [round(v, 3) for v in o["size"]], "yaw": round(o["yaw"], 4)}
                     for i, o in enumerate(objects)],
         "scale": {"source": "lidar", "factor": 1.0},
+        # How ARKit world points map onto this plan (worker/fuse.py places the depth
+        # model with it): plan xy = rotate([x, -z], theta) - origin, height = y - floor_y.
+        "lidar_frame": {"theta": round(float(th), 6), "origin": [round(float(v), 4) for v in origin],
+                        "floor_y": round(float(floor_y), 4)},
     }
 
 

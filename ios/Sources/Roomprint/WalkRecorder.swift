@@ -23,6 +23,8 @@ final class WalkRecorder: NSObject {
     private var videoURL: URL { dir.appendingPathComponent("walk-\(stamp)-video.mov") }
     private var audioURL: URL { dir.appendingPathComponent("walk-\(stamp)-audio.m4a") }
     var outputURL: URL { dir.appendingPathComponent("walk-\(stamp).mov") }
+    /// The LiDAR depth of the same walk (a few frames a second), for the real 3D model.
+    private(set) lazy var depth = DepthLog(url: dir.appendingPathComponent("walk-\(stamp).rgbd"))
 
     init(session: ARSession) {
         self.session = session
@@ -47,6 +49,7 @@ final class WalkRecorder: NSObject {
     @objc private func tick() {
         guard let frame = session.currentFrame, frame.timestamp > last else { return }
         last = frame.timestamp
+        depth.offer(frame)
         let pb = frame.capturedImage
         if writer == nil {
             guard setUpWriter(width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb)) else { return }
@@ -81,6 +84,12 @@ final class WalkRecorder: NSObject {
     func finish() async -> URL? {
         if finished == nil { finished = Task { await stopAndSave() } }
         return await finished!.value
+    }
+
+    /// The depth file, once finish() has stopped the recording (nil if there was no depth).
+    func finishDepth() async -> URL? {
+        _ = await finish()
+        return await depth.finish()
     }
 
     private func stopAndSave() async -> URL? {

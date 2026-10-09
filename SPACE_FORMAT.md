@@ -72,3 +72,6 @@ Units are metres. Floor plane is x/y, z is up. Floor is at z = 0.
   blueprint draws those in amber.
 - `scale.source`: `measurement` (user typed a wall length), `marker` (A4 sheet),
   `lidar` (metric export), `guess`.
+- `lidar_frame` (LiDAR scans only): how ARKit world coordinates map onto the plan,
+  `plan xy = rotate([x, -z], theta) - origin`, `height = y - floor_y`. The worker uses it
+  to place `mesh.ply`, the coloured model fused from the scan's depth (`worker/fuse.py`).

@@ -16,7 +16,7 @@
 //          DELETE /api/s/<token>/clips/<clip>
 //          GET    /api/s/<token>/clips/<clip>/file   the uploaded file (Range requests, for video)
 //          POST   /api/s/<token>/submit              -> status queued
-//          GET    /api/s/<token>/status | space.json | preview.ply
+//          GET    /api/s/<token>/status | space.json | preview.ply | mesh.ply
 import { join, extname } from "path";
 import { existsSync, mkdirSync, statSync, renameSync, unlinkSync } from "fs";
 import { open } from "fs/promises";
@@ -37,7 +37,8 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";  // the overview page's secre
 const CHUNK_MAX = 16 * 1024 * 1024;           // client sends 8 MB; allow some slack
 const FILE_MAX = 8 * 1024 * 1024 * 1024;      // 8 GB per clip
 const VIDEO_EXT = ["mov", "mp4", "m4v", "webm", "3gp", "mkv"];
-const LIDAR_EXT = ["usdz", "obj", "glb", "gltf", "ply", "zip", "roomplan"];  // .roomplan: the iOS app's scan
+// .roomplan: the iOS app's scan; .rgbd: its LiDAR depth frames (worker/fuse.py)
+const LIDAR_EXT = ["usdz", "obj", "glb", "gltf", "ply", "zip", "roomplan", "rgbd"];
 const EXTS = new Set([...VIDEO_EXT, ...LIDAR_EXT]);
 const LOCKED = new Set(["queued", "processing"]);   // no upload changes while the worker owns it
 
@@ -71,6 +72,7 @@ function summary(meta: Meta) {
     }),
     has_space: existsSync(join(dir, "space.json")),
     has_preview: existsSync(join(dir, "preview.ply")),
+    has_mesh: existsSync(join(dir, "mesh.ply")),
   };
 }
 
@@ -196,7 +198,7 @@ const FILE_TYPES: Record<string, string> = {
   // .mov from iPhones is H.264/HEVC in QuickTime; browsers play it when told it is MP4
   mov: "video/mp4", mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", "3gp": "video/3gpp", mkv: "video/x-matroska",
   usdz: "model/vnd.usdz+zip", glb: "model/gltf-binary", gltf: "model/gltf+json", obj: "text/plain",
-  ply: "application/octet-stream", zip: "application/zip", roomplan: "application/json",
+  ply: "application/octet-stream", zip: "application/zip", roomplan: "application/json", rgbd: "application/octet-stream",
 };
 
 function clipFile(meta: Meta, clip: string, req: Request): Response {
@@ -374,6 +376,7 @@ async function handle(req: Request): Promise<Response> {
   if (sub === "/submit" && m === "POST") return submit(meta);
   if (sub === "/space.json" && m === "GET") return spaceFile(meta, "space.json", "application/json");
   if (sub === "/preview.ply" && m === "GET") return spaceFile(meta, "preview.ply", "application/octet-stream");
+  if (sub === "/mesh.ply" && m === "GET") return spaceFile(meta, "mesh.ply", "application/octet-stream");
   if (sub === "/clips" && m === "POST") return createClip(meta, req);
 
   const f = sub.match(/^\/clips\/([\w-]+)\/file$/);
