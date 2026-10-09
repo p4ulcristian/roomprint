@@ -3,6 +3,7 @@
 // writes the same data dir; this server only ever sets state draft/queued.
 //
 // Pages:   /u/<token>  upload (phone)      /s/<token>  viewer
+//          /admin/<ADMIN_TOKEN>  every space, newest first (GET /api/admin/<ADMIN_TOKEN>)
 // API:     POST   /api/spaces  {name}  (Bearer APP_SECRET, the iOS app) -> {token, name}
 //          GET    /api/s/<token>                     meta, status, clips, files present
 //          POST   /api/s/<token>/meta                {capture?, wall_length_m?, note?}
@@ -18,7 +19,7 @@ import { existsSync, mkdirSync, statSync, renameSync, unlinkSync } from "fs";
 import { open } from "fs/promises";
 import { randomBytes, timingSafeEqual } from "crypto";
 import {
-  DATA_DIR, spaceDir, byToken, createSpace, getStatus, setStatus, listClips, listPending,
+  DATA_DIR, spaceDir, byToken, createSpace, listSpaces, getStatus, setStatus, listClips, listPending,
   readJson, writeJson, now, type Meta, type Pending, type Clip,
 } from "./store";
 
@@ -27,6 +28,7 @@ const LOCAL_HOST = "127.0.0.1";
 const TUNNEL_HOST = process.env.TUNNEL_HOST;
 const PUBLIC = join(import.meta.dir, "public");
 const APP_SECRET = process.env.APP_SECRET ?? "";   // the iOS app's key for creating spaces
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";  // the overview page's secret path
 
 const CHUNK_MAX = 16 * 1024 * 1024;           // client sends 8 MB; allow some slack
 const FILE_MAX = 8 * 1024 * 1024 * 1024;      // 8 GB per clip
@@ -223,6 +225,30 @@ async function newSpace(req: Request): Promise<Response> {
   return json({ token: meta.token, name: meta.name });
 }
 
+const isAdmin = (t: string) => {
+  const a = Buffer.from(t), b = Buffer.from(ADMIN_TOKEN);
+  return ADMIN_TOKEN.length >= 16 && a.length === b.length && timingSafeEqual(a, b);
+};
+
+// Every space for the overview page: newest first, with its rooms and uploads.
+function adminList(): Response {
+  const spaces = listSpaces().reverse().map(meta => {
+    const sp = readJson<{ rooms: { name: string; polygon: number[][] }[] }>(join(spaceDir(meta.id), "space.json"));
+    const area = (poly: number[][]) => Math.abs(poly.reduce((a, [x, y], i) => {
+      const [x2, y2] = poly[(i + 1) % poly.length];
+      return a + x * y2 - x2 * y;
+    }, 0)) / 2;
+    return {
+      id: meta.id, name: meta.name, token: meta.token, created: meta.created,
+      status: getStatus(meta.id),
+      clips: listClips(meta.id).map(c => ({ id: c.id, filename: c.filename, bytes: c.bytes, uploaded: c.uploaded })),
+      pending: listPending(meta.id).length,
+      rooms: sp?.rooms.map(r => ({ name: r.name, area: Math.round(area(r.polygon) * 10) / 10 })) ?? null,
+    };
+  });
+  return json({ spaces });
+}
+
 function spaceFile(meta: Meta, name: string, type: string): Response {
   const f = join(spaceDir(meta.id), name);
   if (!existsSync(f)) return err("not ready", 404);
@@ -236,6 +262,12 @@ async function handle(req: Request): Promise<Response> {
 
   if (path === "/" ) return new Response("Roomprint. Use your invite link.", { headers: { "content-type": "text/plain" } });
   if (path.startsWith("/static/")) return staticFile(path) ?? err("not found", 404);
+
+  const a = path.match(/^\/(api\/)?admin\/([\w-]+)\/?$/);
+  if (a && m === "GET") {
+    if (!isAdmin(a[2])) return err("not found", 404);
+    return a[1] ? adminList() : page("admin.html");
+  }
 
   let r = path.match(/^\/([us])\/([\w-]+)\/?$/);
   if (r && m === "GET") {

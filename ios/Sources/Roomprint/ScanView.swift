@@ -153,6 +153,9 @@ struct ScanView: View {
     }
 
     private func upload() async {
+        // Keep going for a while if the phone is locked or the app is switched away.
+        let bg = UIApplication.shared.beginBackgroundTask(withName: "upload")
+        defer { UIApplication.shared.endBackgroundTask(bg) }
         do {
             uploadStep = "Saving the video…"
             let video = await ctl.finishVideo()
@@ -175,14 +178,24 @@ struct ScanView: View {
             try await API.upload(space, file: jsonURL, filename: jsonURL.lastPathComponent) { p in
                 Task { @MainActor in uploadProgress = p }
             }
-            if let video {
-                uploadStep = "Uploading the video…"
-                try await API.upload(space, file: video, filename: video.lastPathComponent) { p in
-                    Task { @MainActor in uploadProgress = p }
-                }
-            }
             uploadStep = "Starting…"
             try await API.submit(space)
+            // The floor plan is on its way; the video follows. It is the big file, so it
+            // retries and resumes where the server says it stopped.
+            if let video {
+                for attempt in 1...5 {
+                    uploadStep = attempt == 1 ? "Uploading the video…" : "Uploading the video (try \(attempt))…"
+                    do {
+                        try await API.upload(space, file: video, filename: video.lastPathComponent) { p in
+                            Task { @MainActor in uploadProgress = p }
+                        }
+                        break
+                    } catch {
+                        if attempt == 5 { throw error }
+                        try? await Task.sleep(for: .seconds(Double(attempt) * 3))
+                    }
+                }
+            }
             uploadStep = nil
             onDone()
             dismiss()
