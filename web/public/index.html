@@ -10,75 +10,53 @@
 <link rel="icon" type="image/png" sizes="64x64" href="/static/icon-64.png">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <style>
-  .hero { display: flex; gap: 18px; align-items: center; margin: 18px 0 8px; }
-  .hero img { width: 84px; height: 84px; border-radius: 20px; flex: none; }
-  .hero h1 { font-size: 1.9rem; margin: 0; }
-  .hero p { margin: .2rem 0 0; color: var(--muted); }
-  ol.steps { padding-left: 1.2rem; margin: .4rem 0 0; }
-  ol.steps li { margin: .45rem 0; }
-  .note { background: #f1f5fb; border-radius: 10px; padding: 10px 12px; font-size: .92rem; margin-top: 10px; }
-  form label { display: block; font-weight: 600; font-size: .9rem; margin: 12px 0 4px; }
-  form input, form textarea { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(--line);
-                              border-radius: 10px; background: #fff; color: var(--ink); }
-  form textarea { min-height: 120px; resize: vertical; }
+  .hero { text-align: center; margin: 28px 0 18px; }
+  .hero img { width: 128px; height: 128px; border-radius: 28px; box-shadow: 0 8px 24px rgba(30,58,95,.25); }
+  .hero h1 { font-size: 2.2rem; margin: 16px 0 4px; }
+  .hero p { margin: 0; color: var(--muted); font-size: 1.05rem; }
+  .center { text-align: center; }
+  ol.steps { list-style: none; padding: 0; margin: 0; }
+  ol.steps li { display: flex; gap: 14px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  ol.steps li:last-child { border-bottom: 0; }
+  ol.steps span { flex: none; width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: #fff;
+                  display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  form input, form textarea { display: block; width: 100%; font: inherit; padding: 11px 12px; margin: 0 0 10px;
+                              border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
+  form textarea { min-height: 90px; resize: vertical; }
   form .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
-  form button { margin-top: 14px; }
-  #sent { color: var(--ok); font-weight: 600; }
-  #formErr { color: var(--bad); }
-  footer { margin-top: 30px; text-align: center; }
+  #sent { color: var(--ok); font-weight: 600; margin-top: 10px; }
+  #formErr { color: var(--bad); margin-top: 10px; }
 </style>
 </head>
 <body>
 <main class="wrap">
   <div class="hero">
     <img src="/static/icon-128.png" alt="">
-    <div>
-      <h1>Roomprint</h1>
-      <p>Walk through your home with an iPhone. Get a measured floor plan, a 3D model and a video of every room.</p>
-    </div>
+    <h1>Roomprint</h1>
+    <p>Scan your rooms. Get a floor plan.</p>
   </div>
 
   <section class="card">
-    <h2>How it works</h2>
     <ol class="steps">
-      <li><strong>Scan.</strong> Open the app and walk slowly through each room. The iPhone's LiDAR sensor measures every wall, door and window while the camera films the walk, with sound, so you can say each room's name as you go.</li>
-      <li><strong>Upload.</strong> When you finish, the scan and the video go to the Roomprint server. The floor plan is ready a few seconds later.</li>
-      <li><strong>Look and share.</strong> Every space gets a private link with four views: a 3D model you can turn around, a printable blueprint with wall lengths, the walkthrough video and the uploaded files.</li>
+      <li><span>1</span><div><strong>Ask for an invite</strong><br><a href="#contact">Form below</a> · your Apple ID email</div></li>
+      <li><span>2</span><div><strong>Install TestFlight</strong><br><a href="https://apps.apple.com/app/testflight/id899247664">App Store</a></div></li>
+      <li><span>3</span><div><strong>Open the invite email</strong><br>Tap <em>View in TestFlight</em></div></li>
+      <li><span>4</span><div><strong>Tap Install</strong></div></li>
     </ol>
-  </section>
-
-  <section class="card">
-    <h2>Get the app (TestFlight)</h2>
-    <p>Roomprint is not in the App Store yet. It is shared through <strong>TestFlight</strong>, Apple's own app for trying apps before they are released. It is free, and it's safe: the app comes from Apple's servers, like any App Store app.</p>
-    <ol class="steps">
-      <li><strong>Ask for an invite</strong> with the form below. Give the email address of the Apple ID on your iPhone.</li>
-      <li><strong>Install TestFlight</strong> from the App Store: <a href="https://apps.apple.com/app/testflight/id899247664">TestFlight on the App Store</a>.</li>
-      <li><strong>Open the invite email on your iPhone</strong> and tap <em>View in TestFlight</em>. That opens TestFlight with your invite code already filled in.</li>
-      <li><strong>Tap Install.</strong> Roomprint appears on your home screen. New versions show up in TestFlight, and it can update them for you.</li>
-    </ol>
-    <div class="note">
-      Scanning needs an iPhone with LiDAR: the <strong>Pro and Pro Max models from iPhone 12 Pro on</strong>. Other iPhones can install the app and open shared plans, but cannot scan.
-      To report a problem, take a screenshot in the app: TestFlight offers to send it to us with a note.
-    </div>
+    <p class="muted small center">Scanning needs an iPhone 12 Pro or newer Pro.</p>
   </section>
 
   <section class="card" id="contact">
-    <h2>Ask for an invite, or write to us</h2>
     <form id="form" novalidate>
-      <label for="name">Your name</label>
-      <input id="name" name="name" autocomplete="name">
-      <label for="email">Your email (the Apple ID on your iPhone, for an invite)</label>
-      <input id="email" name="email" type="email" autocomplete="email" required>
-      <label for="message">Message</label>
+      <input id="name" name="name" autocomplete="name" placeholder="Name">
+      <input id="email" name="email" type="email" autocomplete="email" required placeholder="Apple ID email">
       <textarea id="message" name="message" required>I'd like to try Roomprint.</textarea>
-      <div class="hp" aria-hidden="true"><label for="website">Leave this empty</label><input id="website" name="website" tabindex="-1" autocomplete="off"></div>
-      <button class="btn" type="submit" id="send">Send</button>
-      <p id="sent" class="hidden">Thanks! Your message is on its way.</p>
-      <p id="formErr" class="hidden"></p>
+      <div class="hp" aria-hidden="true"><input id="website" name="website" tabindex="-1" autocomplete="off"></div>
+      <button class="btn wide" type="submit" id="send">Send</button>
+      <p id="sent" class="hidden center">Thanks! You'll get an invite soon.</p>
+      <p id="formErr" class="hidden center"></p>
     </form>
   </section>
-
-  <footer class="muted small">Roomprint</footer>
 </main>
 <script>
   const form = document.getElementById("form");
