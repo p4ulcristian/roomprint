@@ -4,6 +4,7 @@
 //
 // Pages:   /  about Roomprint, TestFlight, contact form (POST /api/contact)
 //          /u/<token>  upload (phone)      /s/<token>  viewer
+//          /prints               every space (the gate requires an admin login)
 //          /admin/<ADMIN_TOKEN>  every space, newest first (GET /api/admin/<ADMIN_TOKEN>)
 // API:     POST   /api/spaces  {name}  (Bearer APP_SECRET, the iOS app) -> {token, name}
 //          GET    /api/s/<token>                     meta, status, clips, files present
@@ -302,6 +303,10 @@ async function handle(req: Request): Promise<Response> {
   if (path === "/" && m === "GET") return page("index.html");
   if (path === "/api/contact" && m === "POST") return contact(req);
   if (path.startsWith("/static/")) return staticFile(path) ?? err("not found", 404);
+
+  // Every space, for admins: the gate puts /prints behind the admins login.
+  if ((path === "/prints" || path === "/prints/") && m === "GET") return page("admin.html");
+  if (path === "/api/prints" && m === "GET") return adminList();
 
   const a = path.match(/^\/(api\/)?admin\/([\w-]+)\/?$/);
   if (a && m === "GET") {

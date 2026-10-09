@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <meta name="referrer" content="no-referrer">
-<title>All spaces · Roomprint</title>
+<title>Prints · Roomprint</title>
 <link rel="stylesheet" href="/static/style.css">
 <link rel="icon" type="image/png" sizes="32x32" href="/static/icon-32.png">
 <link rel="icon" type="image/png" sizes="64x64" href="/static/icon-64.png">
@@ -32,14 +32,15 @@
 <body>
 <main class="wide-wrap">
   <div class="brand"><img src="/static/icon-64.png" alt="">Roomprint</div>
-  <h1>All spaces</h1>
+  <h1>Prints</h1>
   <div id="list"><p class="muted">Loading…</p></div>
 </main>
 <script type="module">
   import { normalize } from "/static/geom.js";
   import { renderBlueprint } from "/static/blueprint.js";
 
-  const token = location.pathname.split("/").filter(Boolean).pop();
+  const parts = location.pathname.split("/").filter(Boolean);
+  const api = parts[0] === "prints" ? "/api/prints" : `/api/admin/${parts.pop()}`;
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const VIDEO = /\.(mov|mp4|m4v|webm|3gp|mkv)$/i;
 
@@ -72,7 +73,7 @@
   }
 
   async function load() {
-    const res = await fetch(`/api/admin/${token}`);
+    const res = await fetch(api);
     if (!res.ok) { document.getElementById("list").innerHTML = `<p class="muted">Not found.</p>`; return; }
     const { spaces } = await res.json();
     const days = [];
