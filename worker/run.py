@@ -228,7 +228,7 @@ def build_mesh(space_id: str, rgbd: Path):
     d = SPACES / space_id
     st = read_json(d / "status.json") or {}
     step = st.get("step", "")
-    tmp = d / "mesh.ply.tmp"
+    tmp = d / "mesh.tmp.ply"   # Open3D picks the format from the extension
     try:
         set_status(d, "processing", "building the 3D model from the depth", 0.1)
         info = fuse.fuse(rgbd, read_json(d / "space.json")["lidar_frame"], tmp,
