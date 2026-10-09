@@ -7,19 +7,20 @@
 # Needs (none of it in git):
 #   ~/.config/roomprint/env      ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_FILE (App Store Connect API key)
 #   ~/.config/roomprint/signing/ dist.key + dist.cer (Apple Distribution), appstore.mobileprovision
-#   xtool (XTOOL, default: xtool on PATH), rcodesign, iTMSTransporter (ITMS)
+#   xtool (XTOOL, default: xtool on PATH), rcodesign, uv
 # The asset catalog comes from the "App icon" GitHub workflow, committed in ios/Icon/compiled/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 set -a; . ~/.config/roomprint/env; set +a
 XTOOL=${XTOOL:-xtool}
-ITMS=${ITMS:-iTMSTransporter}
 SIGN=~/.config/roomprint/signing
 TEAM=VAV24HTM9H
 BUNDLE_ID=XTL-VAV24HTM9H.com.p4ulcristian.roomprint   # the App Store Connect app's bundle ID
+APP_ID=6820771325                                     # App Store Connect app ("RoomPrinter")
 BUILD_NUMBER=$(date -u +%Y%m%d%H%M)
 
-# SDK the app is compiled against, stamped into Info.plist like Xcode does; App Store
+# SDK the app is compiled against, stamped into Info.plist like Xcode does (and into the
+# binary by the linker flags in Package.swift); App Store
 # Connect rejects builds without these. Xcode values: the Xcode that ships this SDK.
 SDK_VERSION=26.5
 SDK_BUILD=23F81a
@@ -70,7 +71,6 @@ rm build/dist.pem
 echo "build/Roomprint.ipa: build $BUILD_NUMBER"
 
 [ "${1:-}" = "--no-upload" ] && exit 0
-# Transporter finds the key in ~/.appstoreconnect/private_keys/AuthKey_<id>.p8
-mkdir -p ~/.appstoreconnect/private_keys
-ln -sf "$ASC_KEY_FILE" ~/.appstoreconnect/private_keys/
-"$ITMS" -m upload -assetFile build/Roomprint.ipa -apiKey "$ASC_KEY_ID" -apiIssuer "$ASC_ISSUER_ID" -v informational
+# The App Store Connect build upload API (tools/upload.py); the Linux Transporter refuses
+# to upload apps because it cannot analyse them without Xcode.
+uv run -q --with pyjwt --with cryptography tools/upload.py "$APP_ID" build/Roomprint.ipa
