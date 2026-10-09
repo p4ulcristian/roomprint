@@ -1,0 +1,32 @@
+# Compiles ios/Icon/AppIcon.png into the asset catalog (Assets.car) the App Store
+# requires. Only Apple's actool can build it, so this runs on a macOS runner; the
+# result is downloaded and committed to ios/Icon/compiled/ (see ios/tools/testflight.sh).
+name: App icon
+on:
+  workflow_dispatch:
+  push:
+    paths: ["ios/Icon/AppIcon.png"]
+jobs:
+  actool:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Asset catalog
+        run: |
+          mkdir -p cat/Icon.xcassets/AppIcon.appiconset out
+          cp ios/Icon/AppIcon.png cat/Icon.xcassets/AppIcon.appiconset/AppIcon.png
+          cat > cat/Icon.xcassets/Contents.json <<'J'
+          {"info": {"author": "xcode", "version": 1}}
+          J
+          cat > cat/Icon.xcassets/AppIcon.appiconset/Contents.json <<'J'
+          {"images": [{"filename": "AppIcon.png", "idiom": "universal", "platform": "ios", "size": "1024x1024"}],
+           "info": {"author": "xcode", "version": 1}}
+          J
+          xcrun actool cat/Icon.xcassets --compile out --platform iphoneos \
+            --minimum-deployment-target 17.0 --target-device iphone --app-icon AppIcon \
+            --output-partial-info-plist out/partial.plist --output-format human-readable-text
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compiled-icon
+          path: out/
