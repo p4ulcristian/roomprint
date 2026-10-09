@@ -51,6 +51,13 @@ function page(name: string): Response {
   });
 }
 
+// The privacy page names a contact address, which comes from the env (MAIL_TO), not the repo.
+async function privacyPage(): Promise<Response> {
+  const html = (await Bun.file(join(PUBLIC, "privacy.html")).text())
+    .replaceAll("{{CONTACT}}", (process.env.MAIL_TO ?? "").replace(/[<>"&]/g, ""));
+  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" } });
+}
+
 function staticFile(path: string): Response | null {
   const rel = path.replace(/^\/static\//, "");
   if (rel.includes("..") || !/^[\w.-]+$/.test(rel)) return null;
@@ -335,6 +342,7 @@ async function handle(req: Request): Promise<Response> {
   const m = req.method;
 
   if (path === "/" && m === "GET") return page("index.html");
+  if (path === "/privacy" && m === "GET") return privacyPage();
   if (path === "/api/contact" && m === "POST") return contact(req);
   if (path.startsWith("/static/")) return staticFile(path) ?? err("not found", 404);
 
