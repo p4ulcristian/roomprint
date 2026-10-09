@@ -26,8 +26,7 @@ struct APIError: LocalizedError {
     var errorDescription: String? { message }
 }
 
-/// The Roomprint web API (web/server.ts): uploads go up in 8 MB chunks and resume
-/// where the server says it is.
+/// The Roomprint web API (web/server.ts). Uploads go up in 8 MB chunks through Uploader.
 enum API {
     static let defaultBase = Secrets.baseURL
     static let chunk = 8 * 1024 * 1024
@@ -93,36 +92,5 @@ enum API {
         let (data, code) = try await request("\(base)/api/s/\(token)")
         guard code == 200 else { throw APIError(message: code == 404 ? "This link is not valid." : errorText(data, code)) }
         return try JSONDecoder().decode(Summary.self, from: data)
-    }
-
-    static func upload(_ s: SavedSpace, file: URL, filename: String, roomName: String? = nil,
-                       progress: @escaping (Double) -> Void) async throws {
-        let size = (try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.intValue ?? 0
-        var body: [String: Any] = ["filename": filename, "bytes": size]
-        if let roomName, !roomName.isEmpty { body["room_name"] = roomName }
-        let (data, code) = try await request("\(s.api)/clips", method: "POST", json: body)
-        guard code == 200, let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let id = obj["id"] as? String, var received = obj["received"] as? Int else {
-            throw APIError(message: errorText(data, code))
-        }
-        let fh = try FileHandle(forReadingFrom: file)
-        defer { try? fh.close() }
-        while received < size {
-            progress(Double(received) / Double(size))
-            try fh.seek(toOffset: UInt64(received))
-            let piece = fh.readData(ofLength: chunk)
-            let (d, c) = try await request("\(s.api)/clips/\(id)?offset=\(received)", method: "PUT", body: piece)
-            let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any]
-            if c == 409, let have = o?["received"] as? Int { received = have; continue } // re-sync
-            guard c == 200, let have = o?["received"] as? Int else { throw APIError(message: errorText(d, c)) }
-            if (o?["complete"] as? Bool) == true { break }
-            received = have
-        }
-        progress(1)
-    }
-
-    static func submit(_ s: SavedSpace) async throws {
-        let (data, code) = try await request("\(s.api)/submit", method: "POST", json: [String: Any]())
-        guard code == 200 else { throw APIError(message: errorText(data, code)) }
     }
 }

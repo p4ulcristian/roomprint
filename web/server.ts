@@ -65,7 +65,10 @@ function summary(meta: Meta) {
     meta: pub,
     status: getStatus(meta.id),
     clips: listClips(meta.id),
-    pending: listPending(meta.id).map(p => ({ ...p, received: partSize(meta.id, p) })),
+    pending: listPending(meta.id).map(p => {
+      const { chunks: _c, ...rest } = p;
+      return { ...rest, received: coverage(meta.id, p).total };
+    }),
     has_space: existsSync(join(dir, "space.json")),
     has_preview: existsSync(join(dir, "preview.ply")),
   };
@@ -76,10 +79,21 @@ const pendingPath = (id: string, clip: string) => join(spaceDir(id), "incoming",
 function partSize(id: string, p: Pending) {
   try { return statSync(partPath(id, p)).size; } catch { return 0; }
 }
+// How much of a pending file has arrived: `prefix` is the unbroken run from byte 0 (where a
+// front-to-back uploader carries on), `total` counts every byte, gaps or not.
+function coverage(id: string, p: Pending) {
+  const pieces = [...(p.chunks ?? [[0, partSize(id, p)]])].sort((a, b) => a[0] - b[0]);
+  let prefix = 0, total = 0, end = 0;
+  for (const [o, n] of pieces) {
+    if (o <= prefix) prefix = Math.max(prefix, o + n);
+    total += Math.max(0, o + n - Math.max(o, end));
+    end = Math.max(end, o + n);
+  }
+  return { prefix, total };
+}
 const validClip = (c: string) => /^c_[0-9a-f]{8}$/.test(c);
 
 async function createClip(meta: Meta, req: Request): Promise<Response> {
-  if (LOCKED.has(getStatus(meta.id).state)) return err("space is being processed", 409);
   const body = await req.json().catch(() => null);
   const filename = String(body?.filename ?? "").slice(0, 200);
   const bytes = Number(body?.bytes);
@@ -95,10 +109,10 @@ async function createClip(meta: Meta, req: Request): Promise<Response> {
       existing.room_name = room_name;
       writeJson(pendingPath(meta.id, existing.id), existing);
     }
-    return json({ id: existing.id, received: partSize(meta.id, existing), bytes });
+    return json({ id: existing.id, received: coverage(meta.id, existing).prefix, bytes });
   }
 
-  const p: Pending = { id: "c_" + randomBytes(4).toString("hex"), room_name, filename, bytes, ext, started: now() };
+  const p: Pending = { id: "c_" + randomBytes(4).toString("hex"), room_name, filename, bytes, ext, started: now(), chunks: [] };
   mkdirSync(join(spaceDir(meta.id), "incoming"), { recursive: true });
   await Bun.write(partPath(meta.id, p), "");
   writeJson(pendingPath(meta.id, p.id), p);
@@ -107,41 +121,58 @@ async function createClip(meta: Meta, req: Request): Promise<Response> {
 
 function clipInfo(meta: Meta, clip: string): Response {
   const p = readJson<Pending>(pendingPath(meta.id, clip));
-  if (p) return json({ id: clip, received: partSize(meta.id, p), bytes: p.bytes, complete: false });
+  if (p) return json({ id: clip, received: coverage(meta.id, p).prefix, bytes: p.bytes, complete: false });
   const c = readJson<Clip>(join(spaceDir(meta.id), "uploads", `${clip}.json`));
   if (c) return json({ id: clip, received: c.bytes, bytes: c.bytes, complete: true });
   return err("no such clip", 404);
 }
 
+// One write at a time per clip, so two chunks arriving together can't lose each other's record.
+const clipLocks = new Map<string, Promise<unknown>>();
+function withClipLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const run = (clipLocks.get(key) ?? Promise.resolve()).then(fn, fn);
+  const done = run.catch(() => {});
+  clipLocks.set(key, done);
+  done.then(() => { if (clipLocks.get(key) === done) clipLocks.delete(key); });
+  return run;
+}
+
+// Chunks may come in any order and more than once (iOS retries background uploads); each
+// is written at its offset. Uploads go on while the space is processed: a scan's worker
+// only reads the .roomplan file, so the video can follow it.
 async function putChunk(meta: Meta, clip: string, req: Request, url: URL): Promise<Response> {
-  if (LOCKED.has(getStatus(meta.id).state)) return err("space is being processed", 409);
-  const p = readJson<Pending>(pendingPath(meta.id, clip));
-  if (!p) {
-    if (existsSync(join(spaceDir(meta.id), "uploads", `${clip}.json`))) return json({ received: -1, complete: true });
-    return err("no such clip", 404);
-  }
-  const offset = Number(url.searchParams.get("offset"));
-  const have = partSize(meta.id, p);
-  // The client must continue exactly where the server is; otherwise it re-syncs.
-  if (offset !== have) return json({ error: "offset mismatch", received: have }, 409);
   const data = new Uint8Array(await req.arrayBuffer());
-  if (data.length === 0 || data.length > CHUNK_MAX) return err("bad chunk size");
-  if (have + data.length > p.bytes) return err("chunk past end of file");
+  return withClipLock(`${meta.id}/${clip}`, async () => {
+    const p = readJson<Pending>(pendingPath(meta.id, clip));
+    if (!p) {
+      if (existsSync(join(spaceDir(meta.id), "uploads", `${clip}.json`))) return json({ received: -1, complete: true });
+      return err("no such clip", 404);
+    }
+    const offset = Number(url.searchParams.get("offset"));
+    if (!Number.isInteger(offset) || offset < 0) return err("bad offset");
+    if (data.length === 0 || data.length > CHUNK_MAX) return err("bad chunk size");
+    if (offset + data.length > p.bytes) return err("chunk past end of file");
 
-  const fh = await open(partPath(meta.id, p), "r+");
-  try { await fh.write(data, 0, data.length, have); } finally { await fh.close(); }
-  const received = have + data.length;
+    const before = p.chunks ?? [[0, partSize(meta.id, p)]];   // read before the write can grow the file
+    const fh = await open(partPath(meta.id, p), "r+");
+    try { await fh.write(data, 0, data.length, offset); } finally { await fh.close(); }
+    p.chunks = [...before.filter(([o]) => o !== offset), [offset, data.length]];
+    writeJson(pendingPath(meta.id, p.id), p);
+    const { prefix } = coverage(meta.id, p);
+    if (prefix < p.bytes) return json({ received: prefix, complete: false });
 
-  if (received === p.bytes) {
     const dir = join(spaceDir(meta.id), "uploads");
     mkdirSync(dir, { recursive: true });
     renameSync(partPath(meta.id, p), join(dir, `${p.id}.${p.ext}`));
     const c: Clip = { id: p.id, room_name: p.room_name, filename: p.filename, bytes: p.bytes, uploaded: now() };
     writeJson(join(dir, `${p.id}.json`), c);
     unlinkSync(pendingPath(meta.id, p.id));
-    return json({ received, complete: true });
-  }
-  return json({ received, complete: false });
+    // A finished scan starts processing by itself: the app may be closed by now.
+    if (p.ext === "roomplan" && !LOCKED.has(getStatus(meta.id).state)) {
+      setStatus(meta.id, { state: "queued", step: "converting the scan", progress: 0, error: null });
+    }
+    return json({ received: p.bytes, complete: true });
+  });
 }
 
 function deleteClip(meta: Meta, clip: string): Response {

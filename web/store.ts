@@ -22,7 +22,12 @@ export type Meta = {
 export type State = "draft" | "queued" | "processing" | "done" | "failed";
 export type Status = { state: State; step: string; progress: number; error: string | null; updated: string };
 export type Clip = { id: string; room_name: string | null; filename: string; bytes: number; uploaded: string };
-export type Pending = { id: string; room_name: string | null; filename: string; bytes: number; ext: string; started: string };
+// chunks: the [offset, length] pieces written so far. They may arrive in any order (the iOS
+// app's background uploads); older pending files without it were written front to back.
+export type Pending = {
+  id: string; room_name: string | null; filename: string; bytes: number; ext: string; started: string;
+  chunks?: [number, number][];
+};
 
 export const now = () => new Date().toISOString();
 export const spaceDir = (id: string) => join(SPACES, id);

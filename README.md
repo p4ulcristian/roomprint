@@ -35,7 +35,10 @@ worker falls back to guessing openings from holes in the point cloud.
 ## iOS app (`ios/`)
 
 LiDAR room scans with Apple's RoomPlan, uploaded to an invite as a `.roomplan` file
-that `worker/roomplan.py` turns into `space.json` without the GPU. Built from Linux
+that `worker/roomplan.py` turns into `space.json` without the GPU. Uploads run in an
+iOS background session (`Uploader.swift`), one task per 8 MB chunk, so they finish
+with the app closed; the server takes chunks in any order and starts on the scan as
+soon as its `.roomplan` file is complete. Built from Linux
 with [xtool](https://github.com/xtool-org/xtool): `cd ios && xtool dev` with the
 phone on USB and unlocked. It needs `ios/Sources/Roomprint/Secrets.swift` (not in
 git):

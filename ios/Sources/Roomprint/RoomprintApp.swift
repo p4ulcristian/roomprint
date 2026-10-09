@@ -3,14 +3,22 @@ import SwiftUI
 
 @main
 struct RoomprintApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = Store()
+    @StateObject private var uploader = Uploader.shared
+    @Environment(\.scenePhase) private var phase
 
     var body: some Scene {
         WindowGroup {
             HomeView()
                 .environmentObject(store)
+                .environmentObject(uploader)
                 // roomprint://u/<token>, from the "Open in the app" button on the upload page
                 .onOpenURL { url in Task { await store.add(url.absoluteString) } }
+        }
+        // Uploads queued while offline, or cut off by a force quit, go on from here.
+        .onChange(of: phase) { _, now in
+            if now == .active { Task { await uploader.resume() } }
         }
     }
 }
@@ -122,6 +130,7 @@ struct SpaceView: View {
     @State private var error: String?
     @State private var scanning = false
     @Environment(\.openURL) private var openURL
+    @EnvironmentObject private var uploader: Uploader
 
     var body: some View {
         List {
@@ -132,6 +141,14 @@ struct SpaceView: View {
                     if s.status.state == "processing" { ProgressView(value: s.status.progress) }
                     if let e = s.status.error { Text(e).foregroundStyle(.red) }
                     LabeledContent("Uploads", value: "\(s.clips.count)")
+                    if let p = uploader.progress[space.token], p.total > 0 {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Uploading in the background: \(Int(Double(p.sent) / Double(p.total) * 100))%")
+                                .font(.callout)
+                            ProgressView(value: Double(p.sent), total: Double(p.total))
+                            Text("You can close the app; it goes on by itself.").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                 } else if let error {
                     Text(error).foregroundStyle(.red)
                 } else {

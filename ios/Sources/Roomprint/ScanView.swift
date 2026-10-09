@@ -86,7 +86,6 @@ struct ScanView: View {
     @StateObject private var ctl = ScanController()
     @State private var roomName = ""
     @State private var uploadStep: String?
-    @State private var uploadProgress = 0.0
     @State private var error: String?
     @Environment(\.dismiss) private var dismiss
 
@@ -95,7 +94,7 @@ struct ScanView: View {
             CaptureViewRep(view: ctl.captureView).ignoresSafeArea()
             VStack(spacing: 12) {
                 if let uploadStep {
-                    ProgressView(value: uploadProgress) { Text(uploadStep) }
+                    ProgressView { Text(uploadStep) }
                 } else if let error {
                     Text(error).foregroundStyle(.red)
                     Button("Close") { dismiss() }
@@ -153,8 +152,9 @@ struct ScanView: View {
     }
 
     private func upload() async {
-        // Keep going for a while if the phone is locked or the app is switched away.
-        let bg = UIApplication.shared.beginBackgroundTask(withName: "upload")
+        // Only the saving happens here; the uploads themselves go to iOS (Uploader), which
+        // finishes them even if the app is closed. The server starts on the scan by itself.
+        let bg = UIApplication.shared.beginBackgroundTask(withName: "save")
         defer { UIApplication.shared.endBackgroundTask(bg) }
         do {
             uploadStep = "Saving the video…"
@@ -168,34 +168,13 @@ struct ScanView: View {
             let usdzURL = dir.appendingPathComponent("scan-\(stamp).usdz")
             let haveUSDZ = (try? structure.export(to: usdzURL)) != nil
 
-            if haveUSDZ {
-                uploadStep = "Uploading the 3D model…"
-                try await API.upload(space, file: usdzURL, filename: usdzURL.lastPathComponent) { p in
-                    Task { @MainActor in uploadProgress = p }
-                }
-            }
-            uploadStep = "Uploading the floor plan…"
-            try await API.upload(space, file: jsonURL, filename: jsonURL.lastPathComponent) { p in
-                Task { @MainActor in uploadProgress = p }
-            }
-            uploadStep = "Starting…"
-            try await API.submit(space)
-            // The floor plan is on its way; the video follows. It is the big file, so it
-            // retries and resumes where the server says it stopped.
-            if let video {
-                for attempt in 1...5 {
-                    uploadStep = attempt == 1 ? "Uploading the video…" : "Uploading the video (try \(attempt))…"
-                    do {
-                        try await API.upload(space, file: video, filename: video.lastPathComponent) { p in
-                            Task { @MainActor in uploadProgress = p }
-                        }
-                        break
-                    } catch {
-                        if attempt == 5 { throw error }
-                        try? await Task.sleep(for: .seconds(Double(attempt) * 3))
-                    }
-                }
-            }
+            uploadStep = "Queueing the uploads…"
+            let files = [jsonURL] + (haveUSDZ ? [usdzURL] : []) + (video.map { [$0] } ?? [])
+            let space = space
+            try await Task.detached {   // copying a long video into chunks takes a moment
+                for f in files { try Uploader.shared.enqueue(space, file: f, filename: f.lastPathComponent) }
+            }.value
+            await Uploader.shared.resume()
             uploadStep = nil
             onDone()
             dismiss()
