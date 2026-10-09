@@ -119,10 +119,16 @@ function drawFiles() {
     if (/\.usdz$/i.test(c.filename))
       return `<section class="card">${head}<p class="muted small">The scanned 3D model. On an iPhone it opens in AR, at real size in your room.</p>
         <a rel="ar" class="btn secondary" href="${url}"><img alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="1" height="1">Open the 3D model</a></section>`;
-    const what = /\.roomplan$/i.test(c.filename) ? "LiDAR scan data (JSON)" : "Uploaded file";
+    const what = /\.roomplan$/i.test(c.filename) ? "LiDAR scan data (JSON)"
+      : /\.rgbd$/i.test(c.filename) ? "Depth measurements and small photos from the scan; the Real scan 3D model is made from them"
+      : "Uploaded file";
     return `<section class="card">${head}<p class="muted small">${what}</p><a class="btn secondary" href="${url}" download="${esc(c.filename)}">Download</a></section>`;
   });
-  box.innerHTML = `<div class="wrap">${items.join("") || '<p class="muted">Nothing uploaded yet.</p>'}</div>`;
+  const note = `<section class="card notice"><p class="small"><strong>Who can see this:</strong> everyone who has this
+    page's link can see the floor plan, the 3D views and the video, and download these files. They are stored on the
+    Roomprint server. The phone that made this space can delete any file, or the whole space, in the Roomprint app:
+    it is deleted from the server right away, for good. <a href="/privacy">Privacy</a></p></section>`;
+  box.innerHTML = `<div class="wrap">${note}${items.join("") || '<p class="muted">Nothing uploaded yet.</p>'}</div>`;
   for (const b of box.querySelectorAll("[data-play]")) b.onclick = () => { show("video"); drawVideo(b.dataset.play); };
 }
 

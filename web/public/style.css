@@ -113,3 +113,5 @@ label.chip { background: #e9edf2; border-radius: 10px; font-weight: 600; display
 .brand { display: inline-flex; align-items: center; gap: 8px; }
 .brand img { width: 26px; height: 26px; }
 .vbar .vlogo { width: 28px; height: 28px; flex: none; }
+.notice { background: #f3f6fa; }
+.notice p { margin: 0; line-height: 1.5; }

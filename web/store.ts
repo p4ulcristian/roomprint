@@ -5,8 +5,8 @@
 // Unfinished uploads live in spaces/<id>/incoming/ and only move to uploads/
 // once every byte has arrived, so the worker never sees a partial file.
 import { join } from "path";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync } from "fs";
-import { randomBytes } from "crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync, rmSync } from "fs";
+import { randomBytes, createHash } from "crypto";
 
 export const DATA_DIR = process.env.DATA_DIR ?? "data";
 export const SPACES = join(DATA_DIR, "spaces");
@@ -18,6 +18,9 @@ export type Meta = {
   created: string;
   scale: { wall_length_m: number | null; note: string };
   capture: "walkthrough" | "per-room";
+  // sha256 of the owner key: whoever holds the key (the phone that made the space) may
+  // delete it. The view link alone only lets people look.
+  owner_hash?: string;
 };
 export type State = "draft" | "queued" | "processing" | "done" | "failed";
 export type Status = { state: State; step: string; progress: number; error: string | null; updated: string };
@@ -53,12 +56,20 @@ export function byToken(token: string): Meta | null {
   return listSpaces().find(m => m.token === token) ?? null;
 }
 
-// Removing a space moves it to DATA_DIR/trash/<id>-<time>, so a mistake can be undone by
-// moving it back; its links stop working at once.
-export function removeSpace(id: string) {
-  const trash = join(DATA_DIR, "trash");
-  mkdirSync(trash, { recursive: true });
-  renameSync(spaceDir(id), join(trash, `${id}-${now().replace(/[:.]/g, "-")}`));
+// Deleting a space removes every file of it at once, for good: there is no trash and
+// no backup. Its links stop working immediately.
+export function deleteSpace(id: string) {
+  rmSync(spaceDir(id), { recursive: true, force: true });
+}
+
+export const hashKey = (key: string) => createHash("sha256").update(key).digest("hex");
+
+/** A new owner key for the space; only its hash is stored. */
+export function setOwner(meta: Meta): string {
+  const key = randomBytes(24).toString("base64url");
+  meta.owner_hash = hashKey(key);
+  writeJson(join(spaceDir(meta.id), "meta.json"), meta);
+  return key;
 }
 
 export function createSpace(name: string): Meta {

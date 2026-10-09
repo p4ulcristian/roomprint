@@ -5,10 +5,12 @@
 // Pages:   /  about Roomprint, TestFlight, contact form (POST /api/contact)
 //          /u/<token>  upload (phone)      /s/<token>  viewer
 //          /prints               every space (the gate requires an admin login)
-//          DELETE /api/prints/<id>  remove a space (moved to DATA_DIR/trash)
+//          DELETE /api/prints/<id>  delete a space for good
 //          /admin/<ADMIN_TOKEN>  every space, newest first (GET /api/admin/<ADMIN_TOKEN>)
 // API:     POST   /api/spaces  {name}  (Bearer APP_SECRET, the iOS app) -> {token, name}
 //          GET    /api/s/<token>                     meta, status, clips, files present
+//          DELETE /api/s/<token>                     delete the space for good (X-Owner-Key)
+//          POST   /api/s/<token>/claim               owner key for an app space made before keys (app secret)
 //          POST   /api/s/<token>/meta                {capture?, wall_length_m?, note?}
 //          POST   /api/s/<token>/clips               {filename, bytes, room_name?} -> {id, received}
 //          GET    /api/s/<token>/clips/<clip>        {id, received, bytes, complete}
@@ -23,7 +25,7 @@ import { open } from "fs/promises";
 import { randomBytes, timingSafeEqual } from "crypto";
 import { mailConfigured, sendMail } from "./mail";
 import {
-  DATA_DIR, spaceDir, byToken, createSpace, removeSpace, listSpaces, getStatus, setStatus, listClips, listPending,
+  DATA_DIR, spaceDir, byToken, createSpace, deleteSpace, setOwner, hashKey, listSpaces, getStatus, setStatus, listClips, listPending,
   readJson, writeJson, now, type Meta, type Pending, type Clip,
 } from "./store";
 
@@ -68,7 +70,7 @@ function staticFile(path: string): Response | null {
 
 function summary(meta: Meta) {
   const dir = spaceDir(meta.id);
-  const { token: _t, ...pub } = meta;
+  const { token: _t, owner_hash: _o, ...pub } = meta;
   return {
     meta: pub,
     status: getStatus(meta.id),
@@ -198,6 +200,8 @@ function deleteClip(meta: Meta, clip: string): Response {
   const ext = extname(c.filename).slice(1).toLowerCase();
   try { unlinkSync(join(dir, `${clip}.${ext}`)); } catch {}
   unlinkSync(join(dir, `${clip}.json`));
+  // The real-scan model is made from the depth file (and holds its colours): it goes too.
+  if (ext === "rgbd") for (const f of ["mesh.ply", "mesh.failed"]) try { unlinkSync(join(spaceDir(meta.id), f)); } catch {}
   return json({ ok: true });
 }
 
@@ -260,13 +264,39 @@ function submit(meta: Meta): Response {
 
 // The iOS app makes its own spaces instead of waiting for an invite link.
 async function newSpace(req: Request): Promise<Response> {
-  const auth = Buffer.from(req.headers.get("authorization") ?? "");
-  const want = Buffer.from(`Bearer ${APP_SECRET}`);
-  if (!APP_SECRET || auth.length !== want.length || !timingSafeEqual(auth, want)) return err("not allowed", 403);
+  if (!appAllowed(req)) return err("not allowed", 403);
   const body = await req.json().catch(() => ({}));
   const name = String(body?.name ?? "").trim().slice(0, 80) || "New space";
   const meta = createSpace(name);
-  return json({ token: meta.token, name: meta.name });
+  return json({ token: meta.token, name: meta.name, owner: setOwner(meta) });
+}
+
+const appAllowed = (req: Request) => {
+  const auth = Buffer.from(req.headers.get("authorization") ?? "");
+  const want = Buffer.from(`Bearer ${APP_SECRET}`);
+  return !!APP_SECRET && auth.length === want.length && timingSafeEqual(auth, want);
+};
+
+// The holder of the owner key may delete the space or its files.
+function isOwner(meta: Meta, req: Request): boolean {
+  const key = req.headers.get("x-owner-key");
+  if (!key || !meta.owner_hash) return false;
+  const a = Buffer.from(hashKey(key)), b = Buffer.from(meta.owner_hash);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+// Spaces the app made before owner keys existed: the app claims them once.
+function claim(meta: Meta, req: Request): Response {
+  if (!appAllowed(req)) return err("not allowed", 403);
+  if (meta.owner_hash) return err("this space already has an owner", 409);
+  return json({ owner: setOwner(meta) });
+}
+
+function deleteWhole(meta: Meta, req: Request): Response {
+  if (!isOwner(meta, req)) return err("only the phone that made this space can delete it", 403);
+  if (LOCKED.has(getStatus(meta.id).state)) return err("it is being processed right now, try again in a minute", 409);
+  deleteSpace(meta.id);
+  return json({ ok: true });
 }
 
 const isAdmin = (t: string) => {
@@ -354,7 +384,7 @@ async function handle(req: Request): Promise<Response> {
     const meta = listSpaces().find(s => s.id === del[1]);
     if (!meta) return err("not found", 404);
     if (LOCKED.has(getStatus(meta.id).state)) return err("it is being processed right now, try again in a minute", 409);
-    removeSpace(meta.id);
+    deleteSpace(meta.id);
     return json({ ok: true });
   }
 
@@ -379,6 +409,8 @@ async function handle(req: Request): Promise<Response> {
   const sub = r[2] ?? "";
 
   if (sub === "" && m === "GET") return json(summary(meta));
+  if (sub === "" && m === "DELETE") return deleteWhole(meta, req);
+  if (sub === "/claim" && m === "POST") return claim(meta, req);
   if (sub === "/status" && m === "GET") return json(getStatus(meta.id));
   if (sub === "/meta" && m === "POST") return updateMeta(meta, req);
   if (sub === "/submit" && m === "POST") return submit(meta);
@@ -394,7 +426,12 @@ async function handle(req: Request): Promise<Response> {
   if (c && validClip(c[1])) {
     if (m === "GET") return clipInfo(meta, c[1]);
     if (m === "PUT") return putChunk(meta, c[1], req, url);
-    if (m === "DELETE") return deleteClip(meta, c[1]);
+    if (m === "DELETE") {
+      // Spaces with an owner: only the owner deletes files. Invite-link spaces keep the
+      // upload page's own delete button.
+      if (meta.owner_hash && !isOwner(meta, req)) return err("only the phone that made this space can delete its files", 403);
+      return deleteClip(meta, c[1]);
+    }
   }
   return err("not found", 404);
 }

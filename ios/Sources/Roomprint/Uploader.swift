@@ -103,6 +103,17 @@ final class Uploader: NSObject, ObservableObject, @unchecked Sendable {
         refreshProgress()
     }
 
+    /// Drops every queued upload of a space (it was deleted): nothing more of it is sent.
+    func cancel(token: String) async {
+        let doomed = Set(jobDirs().filter { load($0)?.token == token }.map(\.lastPathComponent))
+        // Files first, so a cancelled task finds no chunk to retry.
+        for name in doomed { try? FileManager.default.removeItem(at: root.appendingPathComponent(name)) }
+        for t in await session.allTasks {
+            if let d = t.taskDescription?.split(separator: "/").first, doomed.contains(String(d)) { t.cancel() }
+        }
+        refreshProgress()
+    }
+
     private func claim() -> Bool {
         queue.sync {
             if resuming { return false }

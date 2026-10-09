@@ -52,12 +52,12 @@
   <div id="list"><p class="muted">Loading…</p></div>
 </main>
 <dialog id="confirm">
-  <h2>Remove “<span id="cName"></span>”?</h2>
-  <p>It disappears from Prints and its links stop working for everyone who has them. This includes <span id="cWhat"></span>.</p>
+  <h2>Delete “<span id="cName"></span>”?</h2>
+  <p>This deletes it from the server for good: <span id="cWhat"></span>. Its links stop working for everyone. There is no undo and no backup.</p>
   <p id="removeErr" class="hidden"></p>
   <div class="actions">
     <button type="button" id="cCancel">Cancel</button>
-    <button type="button" id="cRemove" class="danger">Remove</button>
+    <button type="button" id="cRemove" class="danger">Delete</button>
   </div>
 </dialog>
 <script type="module">
@@ -91,7 +91,7 @@
       ? s.rooms.map(r => `${esc(r.name)} ${r.area} m²`).join(" · ")
       : esc(s.status.step);
     return `<a class="card space" href="/s/${s.token}" data-token="${s.token}" data-id="${s.id}" data-has="${s.rooms ? 1 : 0}">
-      ${prints ? `<button class="remove" type="button" title="Remove" aria-label="Remove">×</button>` : ""}
+      ${prints ? `<button class="remove" type="button" title="Delete" aria-label="Delete">×</button>` : ""}
       <div class="thumb"><span class="muted">${s.rooms ? "" : "No plan yet"}</span></div>
       <div class="row"><strong>${esc(s.name)}</strong><span class="muted small">${created.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span></div>
       <div class="rooms">${rooms}</div>
@@ -136,23 +136,23 @@
     document.getElementById("cWhat").textContent =
       [rooms && `${rooms} room${rooms > 1 ? "s" : ""}`, `${n} uploaded file${n === 1 ? "" : "s"}`].filter(Boolean).join(" and ");
     removeErr.classList.add("hidden");
-    removeBtn.disabled = false; removeBtn.textContent = "Remove";
+    removeBtn.disabled = false; removeBtn.textContent = "Delete";
     dlg.showModal();
     document.getElementById("cCancel").focus();
   });
   document.getElementById("cCancel").addEventListener("click", () => dlg.close());
   removeBtn.addEventListener("click", async () => {
-    removeBtn.disabled = true; removeBtn.textContent = "Removing…";
+    removeBtn.disabled = true; removeBtn.textContent = "Deleting…";
     try {
       const res = await fetch(`/api/prints/${target.id}`, { method: "DELETE" });
       const out = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(out.error || "could not remove it");
+      if (!res.ok) throw new Error(out.error || "could not delete it");
       dlg.close();
       load();
     } catch (err) {
       removeErr.textContent = err.message.charAt(0).toUpperCase() + err.message.slice(1) + ".";
       removeErr.classList.remove("hidden");
-      removeBtn.disabled = false; removeBtn.textContent = "Remove";
+      removeBtn.disabled = false; removeBtn.textContent = "Delete";
     }
   });
 

@@ -5,6 +5,8 @@ struct SavedSpace: Codable, Identifiable, Hashable {
     var base: String
     var token: String
     var name: String
+    /// Proof that this phone made the space: needed to delete it or its files.
+    var ownerKey: String?
     var id: String { token }
 
     var viewerURL: URL { URL(string: "\(base)/s/\(token)")! }
@@ -52,9 +54,11 @@ enum API {
         (8...64).contains(s.count) && s.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
     }
 
-    static func request(_ url: String, method: String = "GET", json: Any? = nil, body: Data? = nil) async throws -> (Data, Int) {
+    static func request(_ url: String, method: String = "GET", json: Any? = nil, body: Data? = nil,
+                        headers: [String: String] = [:]) async throws -> (Data, Int) {
         var req = URLRequest(url: URL(string: url)!)
         req.httpMethod = method
+        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
         req.timeoutInterval = 120
         if let json {
             req.httpBody = try JSONSerialization.data(withJSONObject: json)
@@ -85,7 +89,31 @@ enum API {
               let token = obj["token"] as? String, let n = obj["name"] as? String else {
             throw APIError(message: errorText(data, code))
         }
-        return SavedSpace(base: defaultBase, token: token, name: n)
+        return SavedSpace(base: defaultBase, token: token, name: n, ownerKey: obj["owner"] as? String)
+    }
+
+    /// The owner key for a space this app made before owner keys existed; nil if the space
+    /// already has an owner (then this phone did not make it).
+    static func claim(_ s: SavedSpace) async throws -> String? {
+        let (data, code) = try await request("\(s.api)/claim", method: "POST", json: [String: Any](),
+                                             headers: ["Authorization": "Bearer \(Secrets.appSecret)"])
+        if code == 409 || code == 403 { return nil }
+        guard code == 200, let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError(message: errorText(data, code))
+        }
+        return obj["owner"] as? String
+    }
+
+    /// Deletes the whole space from the server, for good.
+    static func deleteSpace(_ s: SavedSpace) async throws {
+        let (data, code) = try await request(s.api, method: "DELETE", headers: ["X-Owner-Key": s.ownerKey ?? ""])
+        guard code == 200 || code == 404 else { throw APIError(message: errorText(data, code)) }
+    }
+
+    /// Deletes one uploaded file from the server, for good.
+    static func deleteClip(_ s: SavedSpace, id: String) async throws {
+        let (data, code) = try await request("\(s.api)/clips/\(id)", method: "DELETE", headers: ["X-Owner-Key": s.ownerKey ?? ""])
+        guard code == 200 || code == 404 else { throw APIError(message: errorText(data, code)) }
     }
 
     static func summary(base: String, token: String) async throws -> Summary {
