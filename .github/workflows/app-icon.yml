@@ -11,6 +11,12 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Xcode versions (for the DTXcode stamps in ios/tools/testflight.sh)
+        run: |
+          ls /Applications | grep -i xcode
+          for x in /Applications/Xcode_26.5*.app; do [ -d "$x" ] && DEVELOPER_DIR=$x/Contents/Developer xcodebuild -version && \
+            DEVELOPER_DIR=$x/Contents/Developer xcrun --sdk iphoneos --show-sdk-build-version; done || true
+          xcodebuild -version
       - name: Asset catalog
         run: |
           mkdir -p cat/Icon.xcassets/AppIcon.appiconset out

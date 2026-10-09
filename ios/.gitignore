@@ -2,3 +2,4 @@
 /xtool/
 /.swiftpm/
 /Sources/Roomprint/Secrets.swift
+/build/
