@@ -2,7 +2,8 @@
 // 3D / blueprint viewer over space.json. The GPU worker (worker/) reads and
 // writes the same data dir; this server only ever sets state draft/queued.
 //
-// Pages:   /u/<token>  upload (phone)      /s/<token>  viewer
+// Pages:   /  about Roomprint, TestFlight, contact form (POST /api/contact)
+//          /u/<token>  upload (phone)      /s/<token>  viewer
 //          /admin/<ADMIN_TOKEN>  every space, newest first (GET /api/admin/<ADMIN_TOKEN>)
 // API:     POST   /api/spaces  {name}  (Bearer APP_SECRET, the iOS app) -> {token, name}
 //          GET    /api/s/<token>                     meta, status, clips, files present
@@ -18,6 +19,7 @@ import { join, extname } from "path";
 import { existsSync, mkdirSync, statSync, renameSync, unlinkSync } from "fs";
 import { open } from "fs/promises";
 import { randomBytes, timingSafeEqual } from "crypto";
+import { mailConfigured, sendMail } from "./mail";
 import {
   DATA_DIR, spaceDir, byToken, createSpace, listSpaces, getStatus, setStatus, listClips, listPending,
   readJson, writeJson, now, type Meta, type Pending, type Clip,
@@ -249,6 +251,43 @@ function adminList(): Response {
   return json({ spaces });
 }
 
+// Contact form: every message is kept in DATA_DIR/messages and, when mail is set up,
+// emailed to MAIL_TO with Reply-To set to the sender. A hidden "website" field and a
+// per-address limit keep bots out.
+const recent = new Map<string, number[]>();
+async function contact(req: Request): Promise<Response> {
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() || "local";
+  const now = Date.now();
+  const hits = (recent.get(ip) ?? []).filter(t => now - t < 3600_000);
+  if (hits.length >= 5) return err("too many messages, try again later", 429);
+  const body = await req.json().catch(() => null);
+  if (!body) return err("bad request");
+  if (body.website) return json({ ok: true });   // honeypot: bots fill every field
+  const name = String(body.name ?? "").trim().slice(0, 100);
+  const email = String(body.email ?? "").trim().slice(0, 200);
+  const message = String(body.message ?? "").trim().slice(0, 5000);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err("please give an email address we can answer");
+  if (message.length < 2) return err("please write a message");
+  hits.push(now);
+  recent.set(ip, hits);
+
+  const dir = join(DATA_DIR, "messages");
+  mkdirSync(dir, { recursive: true });
+  const rec = { at: new Date(now).toISOString(), name, email, message, ip, mailed: false };
+  const file = join(dir, `${rec.at.replace(/[:.]/g, "-")}.json`);
+  if (mailConfigured()) {
+    try {
+      await sendMail(`Roomprint: message from ${name || email}`,
+        `${message}\n\n-- \n${name ? name + " " : ""}<${email}>\nSent from the Roomprint contact form.`, email);
+      rec.mailed = true;
+    } catch (e) {
+      console.error("contact mail failed:", e);
+    }
+  }
+  writeJson(file, rec);
+  return json({ ok: true });
+}
+
 function spaceFile(meta: Meta, name: string, type: string): Response {
   const f = join(spaceDir(meta.id), name);
   if (!existsSync(f)) return err("not ready", 404);
@@ -260,7 +299,8 @@ async function handle(req: Request): Promise<Response> {
   const path = url.pathname;
   const m = req.method;
 
-  if (path === "/" ) return new Response("Roomprint. Use your invite link.", { headers: { "content-type": "text/plain" } });
+  if (path === "/" && m === "GET") return page("index.html");
+  if (path === "/api/contact" && m === "POST") return contact(req);
   if (path.startsWith("/static/")) return staticFile(path) ?? err("not found", 404);
 
   const a = path.match(/^\/(api\/)?admin\/([\w-]+)\/?$/);
