@@ -48,6 +48,14 @@ export function byToken(token: string): Meta | null {
   return listSpaces().find(m => m.token === token) ?? null;
 }
 
+// Removing a space moves it to DATA_DIR/trash/<id>-<time>, so a mistake can be undone by
+// moving it back; its links stop working at once.
+export function removeSpace(id: string) {
+  const trash = join(DATA_DIR, "trash");
+  mkdirSync(trash, { recursive: true });
+  renameSync(spaceDir(id), join(trash, `${id}-${now().replace(/[:.]/g, "-")}`));
+}
+
 export function createSpace(name: string): Meta {
   const id = "sp_" + randomBytes(4).toString("hex");
   const meta: Meta = {

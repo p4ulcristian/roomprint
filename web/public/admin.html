@@ -26,6 +26,22 @@
   .tag.state-failed { background: #fde2e2; color: #9b1c1c; }
   .tag.state-processing, .tag.state-queued { background: #fff1d6; color: #8a5a00; }
   .rooms { font-size: .85rem; color: var(--muted, #6b7280); }
+  .space { position: relative; }
+  .remove { position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; border-radius: 50%; padding: 0;
+            border: 1px solid var(--line); background: rgba(255,255,255,.92); color: var(--bad, #b42318);
+            font-size: 18px; line-height: 1; cursor: pointer; opacity: .75; }
+  .remove:hover { opacity: 1; background: #fde2e2; }
+  dialog { border: 0; border-radius: 16px; padding: 22px; max-width: 380px; width: calc(100% - 32px);
+           box-shadow: 0 20px 50px rgba(0,0,0,.25); }
+  dialog::backdrop { background: rgba(15,23,42,.45); }
+  dialog h2 { margin: 0 0 8px; font-size: 1.2rem; }
+  dialog p { margin: 0 0 16px; color: var(--muted, #6b7280); }
+  dialog .actions { display: flex; gap: 10px; justify-content: flex-end; }
+  dialog button { font: inherit; font-weight: 600; padding: 10px 16px; border-radius: 10px; cursor: pointer;
+                  border: 1px solid var(--line); background: #fff; }
+  dialog button.danger { background: var(--bad, #b42318); border-color: transparent; color: #fff; }
+  dialog button:disabled { opacity: .6; cursor: default; }
+  #removeErr { color: var(--bad, #b42318); margin: -6px 0 12px; }
   .wide-wrap { max-width: 1200px; margin: 0 auto; padding: 18px 16px 48px; }
 </style>
 </head>
@@ -35,12 +51,22 @@
   <h1>Prints</h1>
   <div id="list"><p class="muted">Loading…</p></div>
 </main>
+<dialog id="confirm">
+  <h2>Remove “<span id="cName"></span>”?</h2>
+  <p>It disappears from Prints and its links stop working for everyone who has them. This includes <span id="cWhat"></span>.</p>
+  <p id="removeErr" class="hidden"></p>
+  <div class="actions">
+    <button type="button" id="cCancel">Cancel</button>
+    <button type="button" id="cRemove" class="danger">Remove</button>
+  </div>
+</dialog>
 <script type="module">
   import { normalize } from "/static/geom.js";
   import { renderBlueprint } from "/static/blueprint.js";
 
   const parts = location.pathname.split("/").filter(Boolean);
-  const api = parts[0] === "prints" ? "/api/prints" : `/api/admin/${parts.pop()}`;
+  const prints = parts[0] === "prints";   // removing is only offered behind the admins login
+  const api = prints ? "/api/prints" : `/api/admin/${parts.pop()}`;
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const VIDEO = /\.(mov|mp4|m4v|webm|3gp|mkv)$/i;
 
@@ -64,7 +90,8 @@
     const rooms = s.rooms
       ? s.rooms.map(r => `${esc(r.name)} ${r.area} m²`).join(" · ")
       : esc(s.status.step);
-    return `<a class="card space" href="/s/${s.token}" data-token="${s.token}" data-has="${s.rooms ? 1 : 0}">
+    return `<a class="card space" href="/s/${s.token}" data-token="${s.token}" data-id="${s.id}" data-has="${s.rooms ? 1 : 0}">
+      ${prints ? `<button class="remove" type="button" title="Remove" aria-label="Remove">×</button>` : ""}
       <div class="thumb"><span class="muted">${s.rooms ? "" : "No plan yet"}</span></div>
       <div class="row"><strong>${esc(s.name)}</strong><span class="muted small">${created.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span></div>
       <div class="rooms">${rooms}</div>
@@ -76,6 +103,7 @@
     const res = await fetch(api);
     if (!res.ok) { document.getElementById("list").innerHTML = `<p class="muted">Not found.</p>`; return; }
     const { spaces } = await res.json();
+    byId = new Map(spaces.map(s => [s.id, s]));
     const days = [];
     for (const s of spaces) {
       const label = dayLabel(new Date(s.created));
@@ -93,6 +121,41 @@
       }).catch(() => {});
     }
   }
+  let byId = new Map(), target = null;
+  const dlg = document.getElementById("confirm"), removeBtn = document.getElementById("cRemove");
+  const removeErr = document.getElementById("removeErr");
+
+  document.getElementById("list").addEventListener("click", e => {
+    const btn = e.target.closest(".remove");
+    if (!btn) return;
+    e.preventDefault(); e.stopPropagation();
+    target = byId.get(btn.closest(".space").dataset.id);
+    if (!target) return;
+    const n = target.clips.length, rooms = target.rooms?.length ?? 0;
+    document.getElementById("cName").textContent = target.name;
+    document.getElementById("cWhat").textContent =
+      [rooms && `${rooms} room${rooms > 1 ? "s" : ""}`, `${n} uploaded file${n === 1 ? "" : "s"}`].filter(Boolean).join(" and ");
+    removeErr.classList.add("hidden");
+    removeBtn.disabled = false; removeBtn.textContent = "Remove";
+    dlg.showModal();
+    document.getElementById("cCancel").focus();
+  });
+  document.getElementById("cCancel").addEventListener("click", () => dlg.close());
+  removeBtn.addEventListener("click", async () => {
+    removeBtn.disabled = true; removeBtn.textContent = "Removing…";
+    try {
+      const res = await fetch(`/api/prints/${target.id}`, { method: "DELETE" });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.error || "could not remove it");
+      dlg.close();
+      load();
+    } catch (err) {
+      removeErr.textContent = err.message.charAt(0).toUpperCase() + err.message.slice(1) + ".";
+      removeErr.classList.remove("hidden");
+      removeBtn.disabled = false; removeBtn.textContent = "Remove";
+    }
+  });
+
   load();
 </script>
 </body>

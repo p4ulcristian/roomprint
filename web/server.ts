@@ -5,6 +5,7 @@
 // Pages:   /  about Roomprint, TestFlight, contact form (POST /api/contact)
 //          /u/<token>  upload (phone)      /s/<token>  viewer
 //          /prints               every space (the gate requires an admin login)
+//          DELETE /api/prints/<id>  remove a space (moved to DATA_DIR/trash)
 //          /admin/<ADMIN_TOKEN>  every space, newest first (GET /api/admin/<ADMIN_TOKEN>)
 // API:     POST   /api/spaces  {name}  (Bearer APP_SECRET, the iOS app) -> {token, name}
 //          GET    /api/s/<token>                     meta, status, clips, files present
@@ -22,7 +23,7 @@ import { open } from "fs/promises";
 import { randomBytes, timingSafeEqual } from "crypto";
 import { mailConfigured, sendMail } from "./mail";
 import {
-  DATA_DIR, spaceDir, byToken, createSpace, listSpaces, getStatus, setStatus, listClips, listPending,
+  DATA_DIR, spaceDir, byToken, createSpace, removeSpace, listSpaces, getStatus, setStatus, listClips, listPending,
   readJson, writeJson, now, type Meta, type Pending, type Clip,
 } from "./store";
 
@@ -307,6 +308,14 @@ async function handle(req: Request): Promise<Response> {
   // Every space, for admins: the gate puts /prints behind the admins login.
   if ((path === "/prints" || path === "/prints/") && m === "GET") return page("admin.html");
   if (path === "/api/prints" && m === "GET") return adminList();
+  const del = path.match(/^\/api\/prints\/(sp_[0-9a-f]{8})$/);
+  if (del && m === "DELETE") {
+    const meta = listSpaces().find(s => s.id === del[1]);
+    if (!meta) return err("not found", 404);
+    if (LOCKED.has(getStatus(meta.id).state)) return err("it is being processed right now, try again in a minute", 409);
+    removeSpace(meta.id);
+    return json({ ok: true });
+  }
 
   const a = path.match(/^\/(api\/)?admin\/([\w-]+)\/?$/);
   if (a && m === "GET") {
