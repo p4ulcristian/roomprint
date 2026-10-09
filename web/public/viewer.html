@@ -6,6 +6,9 @@
 <meta name="robots" content="noindex">
 <title>Roomprint viewer</title>
 <link rel="stylesheet" href="/static/style.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icon-32.png">
+<link rel="icon" type="image/png" sizes="64x64" href="/static/icon-64.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
@@ -15,7 +18,7 @@
 </head>
 <body class="viewer">
 <header class="vbar">
-  <h1 id="title">Roomprint</h1>
+  <img class="vlogo" src="/static/icon-64.png" alt=""><h1 id="title">Roomprint</h1>
   <div class="tabs hidden" id="tabs">
     <button data-tab="3d">3D</button>
     <button data-tab="plan">Blueprint</button>

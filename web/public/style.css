@@ -110,3 +110,6 @@ label.chip { background: #e9edf2; border-radius: 10px; font-weight: 600; display
 .player .vlist { display: flex; gap: 8px; padding: 10px 16px; overflow-x: auto; background: var(--card); }
 .player .vlist .chip.on { background: var(--ink); color: #fff; }
 .player .vlist button.chip { background: #e9edf2; color: var(--ink); border-radius: 10px; padding: 7px 11px; font-weight: 600; white-space: nowrap; }
+.brand { display: inline-flex; align-items: center; gap: 8px; }
+.brand img { width: 26px; height: 26px; }
+.vbar .vlogo { width: 28px; height: 28px; flex: none; }
