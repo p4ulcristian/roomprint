@@ -124,7 +124,7 @@ struct GuideCards: View {
 
     private static let cards: [(icon: String, title: String, text: String)] = [
         ("figure.walk", "Walk slowly", "Hold the phone upright, about a metre from what you scan, and move at a stroll. A tick in your hand means new surface is coming in."),
-        ("paintbrush.pointed", "Paint every surface", "Sweep the floor, the walls and around furniture as if spraying paint. Scanned surfaces get a light tint. Orange means seen too little: go over it again, closer."),
+        ("paintbrush.pointed", "Paint every surface", "Sweep the floor, the walls and around furniture as if spraying paint. A mesh is drawn over what the phone sees. Red means seen too little: go over it again, closer, until it turns blue."),
         ("map", "Watch the map", "The map in the corner shows the scan from above, with you on it. Dark patches are gaps. An orange arrow points to a gap that is out of sight."),
         ("checkmark.circle", "Done is not the end", "Done shows the scan to turn around. From there you can scan more, upload it, or keep it on the phone and continue another day."),
     ]
@@ -153,6 +153,5 @@ struct GuideCards: View {
             .padding(.horizontal, 24)
         }
         .padding(.vertical, 24)
-        .presentationDetents([.medium])
     }
 }

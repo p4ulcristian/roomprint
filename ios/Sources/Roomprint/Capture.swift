@@ -300,6 +300,22 @@ struct CaptureView: View {
         .overlay(alignment: .topTrailing) {
             if ctl.phase == .scanning { corner.padding() }
         }
+        // Drawn on this screen itself, not as a sheet: a sheet asked for while the screen is
+        // still coming up never shows, and the scan would wait behind it for ever.
+        .overlay {
+            if guide, ctl.phase == .scanning || ctl.phase == .finding {
+                ZStack {
+                    Color.black.opacity(0.5).ignoresSafeArea()
+                    GuideCards {
+                        guide = false
+                        guideSeen = true
+                    }
+                    .frame(height: 430)
+                    .glass(in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+                    .padding(20)
+                }
+            }
+        }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
             ctl.start()
@@ -309,7 +325,6 @@ struct CaptureView: View {
         .onChange(of: looking || guide || naming) { _, on in
             if ctl.phase == .scanning { ctl.recorder.paused = on }
         }
-        .sheet(isPresented: $guide, onDismiss: { guideSeen = true }) { GuideCards { guide = false } }
         .fullScreenCover(isPresented: $looking) { review }
         .alert("Name this room", isPresented: $naming) {
             TextField("Kitchen, bedroom… (optional)", text: $roomName)
@@ -347,11 +362,14 @@ struct CaptureView: View {
                 HStack(spacing: 10) {
                     Label(String(format: "%d:%02d", s / 60, s % 60), systemImage: "record.circle").foregroundStyle(.red)
                     AreaLabel(live: live)
+                    if s > 4, ctl.recorder.depth.count == 0 {
+                        Label("no depth yet", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
                     if planning { Text("Room \(ctl.scan.rooms + 1)") }
                 }
                 .font(.caption.weight(.medium)).monospacedDigit()
             }
-            Text("Move slowly, about a metre from things. Scanned surfaces get a light tint; orange needs another look.")
+            Text("Move slowly, about a metre from things. The mesh turns from red to blue as a surface is scanned well.")
                 .font(.callout).multilineTextAlignment(.center)
             HStack {
                 if planning { Button("Next room") { naming = true }.glassButton().disabled(ctl.closingRoom) }

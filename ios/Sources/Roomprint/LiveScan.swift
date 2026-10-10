@@ -9,7 +9,8 @@ import SwiftUI
 ///
 /// What comes out of it:
 ///   model  the coloured model: a map from above in the corner, and the full-screen look
-///   tint   the same surfaces as a light tint for the camera view (orange: seen too little)
+///   tint   the same surfaces as a wireframe for the camera view: blue where scanned well,
+///          red where seen too little; the camera image shows through
 ///   hint   a line of advice (slow down, move closer, ...)
 ///   arrow  which way to turn for the nearest gap that is out of sight
 ///
@@ -26,7 +27,7 @@ final class LiveScan: ObservableObject {
     var follow = true
 
     let model = SCNScene()
-    /// The scene of the free scan's camera view: the tint sits on the real surfaces.
+    /// The scene of the camera view: the wireframe sits on the real surfaces.
     let tint = SCNScene()
     /// Looks straight down on the model, for the map in the corner.
     let mapCamera = SCNNode()
@@ -49,6 +50,7 @@ final class LiveScan: ObservableObject {
     private let tick = UIImpactFeedbackGenerator(style: .soft), warn = UINotificationFeedbackGenerator()
     private var parts: [UUID: Piece] = [:]
     private var built: [UUID: ObjectIdentifier] = [:]
+    private var builtAt: [UUID: TimeInterval] = [:]
     private var anchors: [ARMeshAnchor] = []
     private var meshing = false
     private var centre = SIMD3<Float>(0, 0, 0)
@@ -200,7 +202,7 @@ final class LiveScan: ObservableObject {
         fullCamera.simdLook(at: centre)
         lastModel = 0
         if !anchors.isEmpty {
-            update(anchors)
+            update(anchors, at: lastMesh)
             grid.outline { [weak self] lines, count in self?.edges.geometry = Self.lines(lines, count: count) }
         }
     }
@@ -223,22 +225,30 @@ final class LiveScan: ObservableObject {
             parts[id]?.tint.removeFromParentNode()
             parts[id] = nil
             built[id] = nil
+            builtAt[id] = nil
         }
         if !gone.isEmpty { grid.forget(gone) }
 
-        // new pieces first, then the changed ones nearest the phone
-        func rank(_ a: ARMeshAnchor) -> Float {
-            if built[a.identifier] == nil { return -1 }
+        // New pieces first, then the nearest. A piece near the phone is redone every two
+        // seconds even if its shape has not changed: its colours do, as it is seen more.
+        let t = frame.timestamp
+        func away(_ a: ARMeshAnchor) -> Float {
             let c = a.transform.columns.3
             return simd_length_squared(SIMD3<Float>(c.x, c.y, c.z) - eye)
         }
-        let due = now.filter { built[$0.identifier] != ObjectIdentifier($0.geometry) }.sorted { rank($0) < rank($1) }
-        if !due.isEmpty { update(Array(due.prefix(16))) }
+        func rank(_ a: ARMeshAnchor) -> Float { built[a.identifier] == nil ? -1 : away(a) }
+        let due = now.filter {
+            built[$0.identifier] != ObjectIdentifier($0.geometry) || (t - (builtAt[$0.identifier] ?? 0) > 2 && away($0) < 30)
+        }.sorted { rank($0) < rank($1) }
+        if !due.isEmpty { update(Array(due.prefix(16)), at: t) }
     }
 
-    private func update(_ list: [ARMeshAnchor]) {
+    private func update(_ list: [ARMeshAnchor], at t: TimeInterval) {
         meshing = true
-        for a in list { built[a.identifier] = ObjectIdentifier(a.geometry) }
+        for a in list {
+            built[a.identifier] = ObjectIdentifier(a.geometry)
+            builtAt[a.identifier] = t
+        }
         grid.mesh(list) { [weak self] done in
             guard let self else { return }
             self.meshing = false
@@ -261,11 +271,7 @@ final class LiveScan: ObservableObject {
         let solid = Self.surface(p, colours: p.colours)
         solid?.firstMaterial?.cullMode = .back
         part.model.geometry = solid
-        let wash = Self.surface(p, colours: p.tints)
-        wash?.firstMaterial?.isDoubleSided = true
-        wash?.firstMaterial?.transparency = 0.32
-        wash?.firstMaterial?.blendMode = .alpha
-        part.tint.geometry = wash
+        part.tint.geometry = Self.wire(p)
         part.lo = p.lo
         part.hi = p.hi
         parts[p.id] = part
@@ -311,6 +317,42 @@ final class LiveScan: ObservableObject {
         g.firstMaterial?.lightingModel = .constant
         return g
     }
+
+    /// The surface as a wireframe: every triangle on its own, textured with its three edges.
+    private static func wire(_ p: VoxelGrid.Part) -> SCNGeometry? {
+        guard p.corners > 0 else { return nil }
+        let uv = SCNGeometrySource(data: p.wireEdges, semantic: .texcoord, vectorCount: p.corners, usesFloatComponents: true,
+                                   componentsPerVector: 2, bytesPerComponent: 4, dataOffset: 0, dataStride: 8)
+        let element = SCNGeometryElement(data: nil, primitiveType: .triangles, primitiveCount: p.corners / 3, bytesPerIndex: 4)
+        let g = SCNGeometry(sources: [source(p.wire, .vertex, count: p.corners), source(p.wireTints, .color, count: p.corners), uv], elements: [element])
+        let m = g.firstMaterial
+        m?.lightingModel = .constant
+        m?.diffuse.contents = edgeImage
+        m?.diffuse.mipFilter = .linear
+        m?.blendMode = .alpha
+        m?.writesToDepthBuffer = false
+        return g
+    }
+
+    /// A triangle's three edges as glowing white lines on nothing: corners at (0, ½), (1, 0)
+    /// and (1, 1), the same whichever way up the image is taken. The colour comes from the vertices.
+    private static let edgeImage: UIImage = {
+        let n: CGFloat = 128
+        return UIGraphicsImageRenderer(size: CGSize(width: n, height: n), format: { let f = UIGraphicsImageRendererFormat(); f.scale = 1; f.opaque = false; return f }()).image { ctx in
+            let c = ctx.cgContext
+            c.move(to: CGPoint(x: 0, y: n / 2))
+            c.addLine(to: CGPoint(x: n, y: 0))
+            c.addLine(to: CGPoint(x: n, y: n))
+            c.closePath()
+            let path = c.path!
+            for (width, alpha) in [(26.0, 0.10), (14.0, 0.22), (6.0, 1.0)] {
+                c.addPath(path)
+                c.setLineWidth(width)
+                c.setStrokeColor(UIColor(white: 1, alpha: alpha).cgColor)
+                c.strokePath()
+            }
+        }
+    }()
 
     private static func points(_ shot: VoxelGrid.Model) -> SCNGeometry? {
         guard shot.count > 0 else { return nil }
@@ -379,11 +421,11 @@ final class LiveScan: ObservableObject {
 /// own queue.
 final class VoxelGrid: @unchecked Sendable {
     static let size: Float = 0.04
-    /// Samples a cell needs before it counts as seen well: about two close looks.
-    static let enough: UInt16 = 25
+    /// Samples a cell needs before it counts as seen well: a close look or two.
+    static let enough: UInt16 = 12
     private static let limit = 1_000_000
     private static let unseen = SIMD3<Float>(0.12, 0.13, 0.15)   // model colour where no depth has landed yet
-    private static let fine = SIMD3<Float>(0.5, 0.9, 0.85), thin = SIMD3<Float>(1, 0.4, 0.03)   // tints
+    private static let fine = SIMD3<Float>(0.1, 0.5, 1), thin = SIMD3<Float>(1, 0.08, 0.1)   // the wireframe: blue done, red not yet
 
     /// One depth frame, thinned out: points in the camera's own axes, with their colours.
     struct Sample {
@@ -400,8 +442,10 @@ final class VoxelGrid: @unchecked Sendable {
     /// One piece of ARKit's mesh in world axes, with a colour and a tint per vertex.
     struct Part {
         var id: UUID
-        var positions: Data, colours: Data, tints: Data, indices: Data
+        var positions: Data, colours: Data, indices: Data
         var vertices: Int, faces: Int
+        /// The same triangles with corners of their own, for the wireframe: place, tint and edge texture place.
+        var wire: Data, wireTints: Data, wireEdges: Data, corners: Int
         var lo: SIMD3<Float>, hi: SIMD3<Float>
     }
     private struct Edge: Hashable {
@@ -524,8 +568,21 @@ final class VoxelGrid: @unchecked Sendable {
                     for i in 0..<corners { idx[i] = UInt32(src[i]) }
                 }
                 shapes[a.identifier] = (p, idx, lo, hi)
-                out.append(Part(id: a.identifier, positions: Self.data(p), colours: Self.data(c), tints: Self.data(t),
-                                indices: idx.withUnsafeBufferPointer { Data(buffer: $0) }, vertices: n, faces: faces, lo: lo, hi: hi))
+                var wp = [SIMD3<Float>](), wt = [SIMD3<Float>](), we = [SIMD2<Float>]()
+                wp.reserveCapacity(corners)
+                wt.reserveCapacity(corners)
+                we.reserveCapacity(corners)
+                let edge = [SIMD2<Float>(0, 0.5), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1)]
+                for i in 0..<corners where Int(idx[i]) < n {
+                    wp.append(p[Int(idx[i])])
+                    wt.append(t[Int(idx[i])])
+                    we.append(edge[i % 3])
+                }
+                let whole = wp.count == corners   // a bad index would shift every triangle after it
+                out.append(Part(id: a.identifier, positions: Self.data(p), colours: Self.data(c),
+                                indices: idx.withUnsafeBufferPointer { Data(buffer: $0) }, vertices: n, faces: faces,
+                                wire: Self.data(wp), wireTints: Self.data(wt), wireEdges: we.withUnsafeBufferPointer { Data(buffer: $0) },
+                                corners: whole ? corners : 0, lo: lo, hi: hi))
             }
             let done = out
             Task { @MainActor in then(done) }

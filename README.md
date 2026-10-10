@@ -79,8 +79,8 @@ the same AR session, so one walk gives the coloured 3D model and the measured fl
 Without rooms the scan is a free scan (`.freescan`): a model of anything, no plan.
 
 While scanning, the scan so far shows (`LiveScan.swift`): ARKit's live mesh coloured
-from the depth frames, as a tint on the surfaces in the camera view (orange where seen
-too little) and as a map from above that follows the phone, with RoomPlan's walls drawn
+from the depth frames, as a wireframe on the surfaces in the camera view (red where seen
+too little, blue where scanned well) and as a map from above that follows the phone, with RoomPlan's walls drawn
 in. A line of advice shows when moving too fast, too far away or in the dark, an arrow
 points to a gap that is out of sight, and new surface ticks in the hand. "Done" shows
 the model full screen with the edges of holes marked; from there: scan more, upload, or
