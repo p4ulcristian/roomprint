@@ -98,7 +98,6 @@ struct ScanView: View {
     @State private var uploadStep: String?
     @State private var error: String?
     @State private var looking = false
-    @AppStorage("scanDots") private var dots = true
     @Environment(\.dismiss) private var dismiss
 
     private var scanning: Bool {
@@ -109,7 +108,6 @@ struct ScanView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             CaptureViewRep(view: ctl.captureView).ignoresSafeArea()
-            if dots, scanning { CoverageDots(live: ctl.recorder.live) }
             VStack(spacing: 12) {
                 if scanning { HintPill(live: ctl.recorder.live) }
                 VStack(spacing: 12) {
@@ -135,7 +133,7 @@ struct ScanView: View {
         }
         .overlay(alignment: .topTrailing) {
             if uploadStep == nil, error == nil {
-                ScanCorner(live: ctl.recorder.live, dots: $dots) { looking = true }.padding()
+                ScanMap(live: ctl.recorder.live) { looking = true }.padding()
             }
         }
         .fullScreenCover(isPresented: $looking) {
@@ -156,7 +154,7 @@ struct ScanView: View {
                 Label(n > 0 ? "Filming with sound · depth \(n)" : "Filming with sound · no depth yet",
                       systemImage: "record.circle").font(.caption).foregroundStyle(.red)
             }
-            Text(ctl.rooms.isEmpty ? "Walk slowly along the walls. Point at doors and windows. The small model shows what is scanned; dark gaps are not."
+            Text(ctl.rooms.isEmpty ? "Walk slowly along the walls. Point at doors and windows. The small map shows what is scanned; dark gaps are not."
                  : "Room \(ctl.rooms.count + 1): go on into the next room.")
                 .font(.callout).multilineTextAlignment(.center)
             Button("Done with this room") { ctl.finishRoom() }

@@ -1,24 +1,29 @@
 import ARKit
-import RealityKit
+import SceneKit
 import SwiftUI
 
 /// A scan without rooms: anything the LiDAR can see (an object, one wall, a stairwell, a
 /// garden corner). The walk is filmed and its depth and camera poses recorded exactly like
 /// a room scan's; the server builds the 3D model from those. What has been covered so far
-/// shows while scanning (LiveScan).
+/// shows while scanning (LiveScan): its tint is drawn in this camera view, on the surfaces.
 @MainActor
 final class FreeScanController: ObservableObject {
-    let view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
+    let view = ARSCNView(frame: .zero)
     private(set) lazy var recorder = WalkRecorder(session: view.session)
 
     static var isSupported: Bool {
-        ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
+        ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
+            && ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
     }
 
     func start() {
         let config = ARWorldTrackingConfiguration()
         config.frameSemantics = [.sceneDepth, .smoothedSceneDepth]
+        config.sceneReconstruction = .mesh
         config.environmentTexturing = .none
+        view.scene = recorder.live.tint
+        view.automaticallyUpdatesLighting = false
+        view.antialiasingMode = .none
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         recorder.start()
     }
@@ -30,9 +35,9 @@ final class FreeScanController: ObservableObject {
 }
 
 struct ARViewRep: UIViewRepresentable {
-    let view: ARView
-    func makeUIView(context: Context) -> ARView { view }
-    func updateUIView(_ uiView: ARView, context: Context) {}
+    let view: ARSCNView
+    func makeUIView(context: Context) -> ARSCNView { view }
+    func updateUIView(_ uiView: ARSCNView, context: Context) {}
 }
 
 struct FreeScanView: View {
@@ -43,13 +48,11 @@ struct FreeScanView: View {
     @State private var step: String?
     @State private var error: String?
     @State private var looking = false
-    @AppStorage("scanDots") private var dots = true
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ZStack(alignment: .bottom) {
             ARViewRep(view: ctl.view).ignoresSafeArea()
-            if dots, step == nil, error == nil { CoverageDots(live: ctl.recorder.live) }
             VStack(spacing: 12) {
               HintPill(live: ctl.recorder.live)
               VStack(spacing: 12) {
@@ -64,7 +67,7 @@ struct FreeScanView: View {
                         Label(n > 0 ? "Filming with sound · depth \(n)" : "Filming with sound · no depth yet",
                               systemImage: "record.circle").font(.caption).foregroundStyle(.red)
                     }
-                    Text("Move slowly around what you want to scan, about a metre away. Dots mark what is scanned; orange needs another look.")
+                    Text("Move slowly around what you want to scan, about a metre away. Scanned surfaces get a light tint; orange needs another look.")
                         .font(.callout).multilineTextAlignment(.center)
                     Button("Finish") { looking = true }
                         .glassButton(prominent: true)
@@ -83,7 +86,7 @@ struct FreeScanView: View {
         }
         .overlay(alignment: .topTrailing) {
             if step == nil, error == nil {
-                ScanCorner(live: ctl.recorder.live, dots: $dots) { looking = true }.padding()
+                ScanMap(live: ctl.recorder.live) { looking = true }.padding()
             }
         }
         // Before anything is uploaded: the scan to turn around, and the choice to go on.
