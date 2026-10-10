@@ -107,6 +107,9 @@ final class LiveScan: ObservableObject {
 
         guard t - lastSample >= 0.2 else { return }
         lastSample = t
+        var track = "lim"
+        if case .normal = frame.camera.trackingState { track = "ok" }
+        state = "\(track) \(frame.sceneDepth != nil ? "D" : frame.smoothedSceneDepth != nil ? "d" : "nodepth") \(recording ? "rec" : "paused")"
         var centreDepth: Float?
         if case .normal = frame.camera.trackingState, let s = VoxelGrid.sample(frame) {
             centreDepth = s.centre
@@ -206,6 +209,14 @@ final class LiveScan: ObservableObject {
             grid.outline { [weak self] lines, count in self?.edges.geometry = Self.lines(lines, count: count) }
         }
     }
+
+    /// For finding out on a phone why the picture is wrong: cells seen, mesh pieces, and of
+    /// the mesh corners last coloured, how many found a cell and how many count as done.
+    var debug: String {
+        let m = grid.matched
+        return "c\(grid.cells) p\(parts.count) hit\(m.total > 0 ? m.found * 100 / m.total : 0)% blue\(m.total > 0 ? m.done * 100 / m.total : 0)% \(state)"
+    }
+    private var state = "-"
 
     var lookAt: SCNVector3 { SCNVector3(centre.x, centre.y, centre.z) }
 
@@ -461,6 +472,8 @@ final class VoxelGrid: @unchecked Sendable {
     private let lock = NSLock()
     private var waiting = 0
     private var _cells = 0
+    private var _matched = (found: 0, done: 0, total: 0)
+    var matched: (found: Int, done: Int, total: Int) { lock.withLock { _matched } }
     /// Cells seen so far.
     var cells: Int { lock.withLock { _cells } }
 
@@ -533,6 +546,7 @@ final class VoxelGrid: @unchecked Sendable {
     func mesh(_ anchors: [ARMeshAnchor], then: @escaping @MainActor ([Part]) -> Void) {
         queue.async { [self] in
             var out = [Part]()
+            var found = 0, done = 0, total = 0
             for a in anchors {
                 let g = a.geometry
                 let n = g.vertices.count, faces = g.faces.count, corners = faces * 3
@@ -550,7 +564,10 @@ final class VoxelGrid: @unchecked Sendable {
                     p.append(w)
                     lo = simd_min(lo, w)
                     hi = simd_max(hi, w)
+                    total += 1
                     if let k = cell(at: w) {
+                        found += 1
+                        if hits[k] >= Self.enough { done += 1 }
                         c.append(col[k])
                         t.append(hits[k] >= Self.enough ? Self.fine : Self.thin)
                     } else {
@@ -584,8 +601,10 @@ final class VoxelGrid: @unchecked Sendable {
                                 wire: Self.data(wp), wireTints: Self.data(wt), wireEdges: we.withUnsafeBufferPointer { Data(buffer: $0) },
                                 corners: whole ? corners : 0, lo: lo, hi: hi))
             }
-            let done = out
-            Task { @MainActor in then(done) }
+            let stats = (found, done, total)
+            lock.withLock { _matched = stats }
+            let made = out
+            Task { @MainActor in then(made) }
         }
     }
 

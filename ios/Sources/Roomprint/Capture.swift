@@ -94,21 +94,44 @@ final class CaptureController: NSObject, ObservableObject, RoomCaptureSessionDel
             r.delegate = self
             r.run(configuration: RoomCaptureSession.Configuration())
             rooms = r
-            // RoomPlan sets the session up its own way; if that left ARKit's mesh out, ask for it again.
+            // RoomPlan sets the session up its own way; if that left out ARKit's mesh or the
+            // depth frames, ask for them again (twice: it may take its time settling).
             Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(2.5))
-                self?.wantMesh()
+                for _ in 0..<2 {
+                    try? await Task.sleep(for: .seconds(2.5))
+                    self?.tune()
+                }
             }
         }
         recorder.start()
     }
 
-    private func wantMesh() {
-        guard !stopped, ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh),
-              let frame = view.session.currentFrame, !frame.anchors.contains(where: { $0 is ARMeshAnchor }),
-              let config = view.session.configuration as? ARWorldTrackingConfiguration, !config.sceneReconstruction.contains(.mesh) else { return }
-        config.sceneReconstruction.insert(.mesh)
-        view.session.run(config)
+    private func tune() {
+        guard !stopped, let frame = view.session.currentFrame,
+              let config = view.session.configuration as? ARWorldTrackingConfiguration else { return }
+        var change = false
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh), !config.sceneReconstruction.contains(.mesh),
+           !frame.anchors.contains(where: { $0 is ARMeshAnchor }) {
+            config.sceneReconstruction.insert(.mesh)
+            change = true
+        }
+        if frame.sceneDepth == nil, !config.frameSemantics.contains(.sceneDepth) {
+            config.frameSemantics.insert(.sceneDepth)
+            change = true
+        }
+        if change { view.session.run(config) }
+    }
+
+    /// The recording waits while something is up over the camera (the guide, the look at
+    /// the scan, a room's name). Told on every redraw of the screen, so it cannot be missed.
+    func hold(_ on: Bool) {
+        if phase == .scanning, recorder.paused != on { recorder.paused = on }
+    }
+
+    /// What the session is set up for, for the line of numbers on the screen.
+    var debug: String {
+        let c = view.session.configuration as? ARWorldTrackingConfiguration
+        return "\(rooms != nil ? "plan" : "free") cfg:\(c?.frameSemantics.contains(.sceneDepth) == true ? "D" : "-")\(c?.sceneReconstruction.contains(.mesh) == true ? "M" : "-") dep\(recorder.depth.count)"
     }
 
     /// For the screen: the scan is safe on the phone, but something after that went wrong.
@@ -277,6 +300,7 @@ struct CaptureView: View {
     private var planning: Bool { ctl.scan.plan && CaptureController.canPlan }
 
     var body: some View {
+        let _ = ctl.hold(looking || guide || naming)
         ZStack(alignment: .bottom) {
             ARViewRep(view: ctl.view).ignoresSafeArea()
             if ctl.phase == .scanning { GapArrow(live: live) }
@@ -322,9 +346,6 @@ struct CaptureView: View {
             if !guideSeen { guide = true }
         }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
-        .onChange(of: looking || guide || naming) { _, on in
-            if ctl.phase == .scanning { ctl.recorder.paused = on }
-        }
         .fullScreenCover(isPresented: $looking) { review }
         .alert("Name this room", isPresented: $naming) {
             TextField("Kitchen, bedroom… (optional)", text: $roomName)
@@ -368,6 +389,8 @@ struct CaptureView: View {
                     if planning { Text("Room \(ctl.scan.rooms + 1)") }
                 }
                 .font(.caption.weight(.medium)).monospacedDigit()
+                // While the scan guide is being got right: what the phone is really doing.
+                Text("\(ctl.debug) · \(live.debug)").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
             }
             Text("Move slowly, about a metre from things. The mesh turns from red to blue as a surface is scanned well.")
                 .font(.callout).multilineTextAlignment(.center)
