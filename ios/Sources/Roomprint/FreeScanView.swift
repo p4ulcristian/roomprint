@@ -4,24 +4,21 @@ import SwiftUI
 
 /// A scan without rooms: anything the LiDAR can see (an object, one wall, a stairwell, a
 /// garden corner). The walk is filmed and its depth and camera poses recorded exactly like
-/// a room scan's; the server builds the 3D model from those. ARKit's live mesh is drawn
-/// over the camera image, so what has been covered so far shows while scanning.
+/// a room scan's; the server builds the 3D model from those. What has been covered so far
+/// shows while scanning (LiveScan).
 @MainActor
 final class FreeScanController: ObservableObject {
     let view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
     private(set) lazy var recorder = WalkRecorder(session: view.session)
 
     static var isSupported: Bool {
-        ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
-            && ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
+        ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
     }
 
     func start() {
         let config = ARWorldTrackingConfiguration()
-        config.sceneReconstruction = .mesh
         config.frameSemantics = [.sceneDepth, .smoothedSceneDepth]
         config.environmentTexturing = .none
-        view.debugOptions.insert(.showSceneUnderstanding)   // the coverage mesh
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         recorder.start()
     }
@@ -45,12 +42,17 @@ struct FreeScanView: View {
     @StateObject private var ctl = FreeScanController()
     @State private var step: String?
     @State private var error: String?
+    @State private var looking = false
+    @AppStorage("scanDots") private var dots = true
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ZStack(alignment: .bottom) {
             ARViewRep(view: ctl.view).ignoresSafeArea()
+            if dots, step == nil, error == nil { CoverageDots(live: ctl.recorder.live) }
             VStack(spacing: 12) {
+              HintPill(live: ctl.recorder.live)
+              VStack(spacing: 12) {
                 if let step {
                     ProgressView { Text(step) }
                 } else if let error {
@@ -62,15 +64,16 @@ struct FreeScanView: View {
                         Label(n > 0 ? "Filming with sound · depth \(n)" : "Filming with sound · no depth yet",
                               systemImage: "record.circle").font(.caption).foregroundStyle(.red)
                     }
-                    Text("Move slowly around what you want to scan, about a metre away. The coloured mesh shows what has been covered.")
+                    Text("Move slowly around what you want to scan, about a metre away. Dots mark what is scanned; orange needs another look.")
                         .font(.callout).multilineTextAlignment(.center)
-                    Button("Finish & upload") { Task { await upload() } }
+                    Button("Finish") { looking = true }
                         .glassButton(prominent: true)
                 }
+              }
+              .padding(18)
+              .frame(maxWidth: .infinity)
+              .glass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
             }
-            .padding(18)
-            .frame(maxWidth: .infinity)
-            .glass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
             .padding()
         }
         .overlay(alignment: .topLeading) {
@@ -78,6 +81,23 @@ struct FreeScanView: View {
                 CloseButton { ctl.stop(); dismiss() }.padding()
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if step == nil, error == nil {
+                ScanCorner(live: ctl.recorder.live, dots: $dots) { looking = true }.padding()
+            }
+        }
+        // Before anything is uploaded: the scan to turn around, and the choice to go on.
+        .fullScreenCover(isPresented: $looking) {
+            ModelLook(live: ctl.recorder.live) {
+                Button("Scan more") { looking = false }.glassButton()
+                Button("Upload") {
+                    looking = false
+                    Task { await upload() }
+                }
+                .glassButton(prominent: true)
+            }
+        }
+        .onChange(of: looking) { _, on in ctl.recorder.paused = on }
         .onAppear { ctl.start() }
         .onDisappear { ctl.stop() }
     }

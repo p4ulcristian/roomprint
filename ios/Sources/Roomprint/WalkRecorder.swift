@@ -30,6 +30,10 @@ final class WalkRecorder: NSObject {
     private(set) lazy var poses = PoseLog(url: dir.appendingPathComponent("walk-\(stamp).poses"))
     /// When filming began (nil before the first frame).
     private(set) var started: Date?
+    /// The scan so far, shown on the phone while scanning.
+    let live = LiveScan()
+    /// While true nothing is kept: the video holds its last frame and no depth is added.
+    var paused = false
 
     init(session: ARSession) {
         self.session = session
@@ -54,6 +58,8 @@ final class WalkRecorder: NSObject {
     @objc private func tick() {
         guard let frame = session.currentFrame, frame.timestamp > last else { return }
         last = frame.timestamp
+        live.frame(frame, recording: !paused)
+        if paused { return }
         depth.offer(frame)
         let pb = frame.capturedImage
         if writer == nil {

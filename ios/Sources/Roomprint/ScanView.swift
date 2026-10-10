@@ -97,24 +97,35 @@ struct ScanView: View {
     @State private var roomName = ""
     @State private var uploadStep: String?
     @State private var error: String?
+    @State private var looking = false
+    @AppStorage("scanDots") private var dots = true
     @Environment(\.dismiss) private var dismiss
+
+    private var scanning: Bool {
+        if case .scanning = ctl.phase { return uploadStep == nil && error == nil }
+        return false
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             CaptureViewRep(view: ctl.captureView).ignoresSafeArea()
+            if dots, scanning { CoverageDots(live: ctl.recorder.live) }
             VStack(spacing: 12) {
-                if let uploadStep {
-                    ProgressView { Text(uploadStep) }
-                } else if let error {
-                    Text(error).foregroundStyle(.red)
-                    Button("Close") { dismiss() }.glassButton()
-                } else {
-                    controls
+                if scanning { HintPill(live: ctl.recorder.live) }
+                VStack(spacing: 12) {
+                    if let uploadStep {
+                        ProgressView { Text(uploadStep) }
+                    } else if let error {
+                        Text(error).foregroundStyle(.red)
+                        Button("Close") { dismiss() }.glassButton()
+                    } else {
+                        controls
+                    }
                 }
+                .padding(18)
+                .frame(maxWidth: .infinity)
+                .glass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
             }
-            .padding(18)
-            .frame(maxWidth: .infinity)
-            .glass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
             .padding()
         }
         .overlay(alignment: .topLeading) {
@@ -122,6 +133,17 @@ struct ScanView: View {
                 CloseButton { ctl.stopAll(); dismiss() }.padding()
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if uploadStep == nil, error == nil {
+                ScanCorner(live: ctl.recorder.live, dots: $dots) { looking = true }.padding()
+            }
+        }
+        .fullScreenCover(isPresented: $looking) {
+            ModelLook(live: ctl.recorder.live) {
+                Button("Back to the scan") { looking = false }.glassButton(prominent: true)
+            }
+        }
+        .onChange(of: looking) { _, on in ctl.recorder.paused = on }
         .onAppear { ctl.startRoom() }
         .onDisappear { ctl.stopAll() }
     }
@@ -134,7 +156,7 @@ struct ScanView: View {
                 Label(n > 0 ? "Filming with sound · depth \(n)" : "Filming with sound · no depth yet",
                       systemImage: "record.circle").font(.caption).foregroundStyle(.red)
             }
-            Text(ctl.rooms.isEmpty ? "Walk slowly along the walls. Point at doors and windows. Say the room's name."
+            Text(ctl.rooms.isEmpty ? "Walk slowly along the walls. Point at doors and windows. The small model shows what is scanned; dark gaps are not."
                  : "Room \(ctl.rooms.count + 1): go on into the next room.")
                 .font(.callout).multilineTextAlignment(.center)
             Button("Done with this room") { ctl.finishRoom() }

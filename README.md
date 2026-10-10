@@ -74,8 +74,12 @@ viewer's Crop tool sets it. The viewer also measures between any two tapped poin
 
 LiDAR room scans with Apple's RoomPlan, uploaded to an invite as a `.roomplan` file
 that `worker/roomplan.py` turns into `space.json` without the GPU. A second mode, Free
-scan, records the same video, depth and poses without RoomPlan, with ARKit's live mesh
-as coverage feedback, for things that are not rooms. The space's page in the app is the
+scan, records the same video, depth and poses without RoomPlan, for things that are not
+rooms. While scanning, both modes show the scan so far (`LiveScan.swift`): a rough
+coloured model built on the phone from the depth frames, small in a corner and full
+screen to turn around before uploading, dots over the camera image on what is scanned
+(orange where it was seen too little), and a line of advice when moving too fast, too
+far away or in the dark. The space's page in the app is the
 web viewer in a web view; exports and files tapped there are downloaded by the app and
 handed to the share sheet (a USDZ opens in AR Quick Look). The interface uses Liquid
 Glass on iOS 26 and the blur material on iOS 17 and 18. Uploads run in an
