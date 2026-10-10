@@ -81,7 +81,7 @@ struct ModelLook<Buttons: View>: View {
                 Text("The scan so far").font(.headline)
                 Text("Dark gaps have not been scanned; orange lines mark their edges. Drag to turn it, pinch to zoom.")
                     .font(.callout).multilineTextAlignment(.center)
-                HStack { buttons }
+                buttons
             }
             .padding(18)
             .frame(maxWidth: .infinity)
@@ -89,5 +89,70 @@ struct ModelLook<Buttons: View>: View {
             .padding()
         }
         .preferredColorScheme(.dark)
+    }
+}
+
+/// An arrow at the rim of the screen towards a gap that is out of sight.
+struct GapArrow: View {
+    @ObservedObject var live: LiveScan
+
+    var body: some View {
+        GeometryReader { g in
+            if let a = live.arrow {
+                let r = min(g.size.width, g.size.height) * 0.36
+                VStack(spacing: 2) {
+                    Image(systemName: "arrowtriangle.up.fill").font(.title3)
+                    Text("gap").font(.caption2.weight(.bold)).rotationEffect(.radians(-a))
+                }
+                .foregroundStyle(.orange)
+                .padding(10)
+                .glass(in: Circle())
+                .rotationEffect(.radians(a))
+                .position(x: g.size.width / 2 + r * sin(a), y: g.size.height * 0.42 - r * cos(a))
+                .animation(.easeOut(duration: 0.25), value: a)
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
+}
+
+/// How to scan, in four cards: shown before the first scan, and from the ? button.
+struct GuideCards: View {
+    var done: () -> Void
+    @State private var page = 0
+
+    private static let cards: [(icon: String, title: String, text: String)] = [
+        ("figure.walk", "Walk slowly", "Hold the phone upright, about a metre from what you scan, and move at a stroll. A tick in your hand means new surface is coming in."),
+        ("paintbrush.pointed", "Paint every surface", "Sweep the floor, the walls and around furniture as if spraying paint. Scanned surfaces get a light tint. Orange means seen too little: go over it again, closer."),
+        ("map", "Watch the map", "The map in the corner shows the scan from above, with you on it. Dark patches are gaps. An orange arrow points to a gap that is out of sight."),
+        ("checkmark.circle", "Done is not the end", "Done shows the scan to turn around. From there you can scan more, upload it, or keep it on the phone and continue another day."),
+    ]
+
+    var body: some View {
+        VStack(spacing: 18) {
+            TabView(selection: $page) {
+                ForEach(Self.cards.indices, id: \.self) { i in
+                    VStack(spacing: 16) {
+                        Image(systemName: Self.cards[i].icon).font(.system(size: 56, weight: .light)).foregroundStyle(.tint)
+                        Text(Self.cards[i].title).font(.title2.weight(.semibold))
+                        Text(Self.cards[i].text).multilineTextAlignment(.center).foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 28)
+                    .tag(i)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .always))
+            .indexViewStyle(.page(backgroundDisplayMode: .always))
+            Button {
+                if page < Self.cards.count - 1 { withAnimation { page += 1 } } else { done() }
+            } label: {
+                Text(page < Self.cards.count - 1 ? "Next" : "Start scanning").frame(maxWidth: .infinity)
+            }
+            .glassButton(prominent: true)
+            .padding(.horizontal, 24)
+        }
+        .padding(.vertical, 24)
+        .presentationDetents([.medium])
     }
 }

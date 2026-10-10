@@ -1,25 +1,22 @@
-import ARKit
-import RoomPlan
 import SwiftUI
 
-/// One space: its viewer (3D, plan, video, exports) once something has been scanned, the
-/// two ways to scan, and its files.
+/// One space: its viewer (3D, plan, video, exports) once something has been scanned,
+/// scanning, the scans kept on this phone, and its files on the server.
 struct SpaceView: View {
     let space: SavedSpace
     @State private var summary: Summary?
     @State private var error: String?
-    @State private var scanning: ScanKind?
+    @State private var capture: KeptScan?
+    @State private var kept: [KeptScan] = []
+    @State private var showKept = false
+    @State private var resume: KeptScan?
+    @AppStorage("wantPlan") private var wantPlan = true
     @State private var showFiles = false
     @State private var askDelete = false
     @State private var deleteError: String?
     @StateObject private var files = FileFetcher()
     @EnvironmentObject private var uploader: Uploader
     @EnvironmentObject private var store: Store
-
-    enum ScanKind: String, Identifiable {
-        case rooms, free
-        var id: String { rawValue }
-    }
 
     static let deleteMessage = "The floor plan, 3D models, video, depth and every other file of this space are deleted from the server right away, for good. Its link stops working for everyone. There is no undo and no backup."
 
@@ -52,7 +49,7 @@ struct SpaceView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if summary?.has_space == true || summary?.clips.isEmpty == false { scanMenu { Image(systemName: "viewfinder") } }
+                if summary?.has_space == true || summary?.clips.isEmpty == false || !kept.isEmpty { scanMenu { Image(systemName: "viewfinder") } }
                 Menu {
                     ShareLink(item: space.viewerURL) { Label("Share the link", systemImage: "square.and.arrow.up") }
                     Button { showFiles = true } label: { Label("Files on the server", systemImage: "folder") }
@@ -72,10 +69,16 @@ struct SpaceView: View {
                 try? await Task.sleep(for: .seconds(3))
             }
         }
-        .fullScreenCover(item: $scanning) { kind in
-            switch kind {
-            case .rooms: ScanView(space: space) { Task { await load() } }
-            case .free: FreeScanView(space: space) { Task { await load() } }
+        .fullScreenCover(item: $capture) { scan in
+            CaptureView(space: me, scan: scan) { Task { await load() } }
+        }
+        .sheet(isPresented: $showKept, onDismiss: {
+            // "Continue scanning" opens the camera once the sheet is out of the way.
+            if let r = resume { resume = nil; capture = r }
+        }) {
+            KeptSheet(space: me, scans: kept, onChange: { Task { await load() } }) { scan in
+                resume = scan
+                showKept = false
             }
         }
         .sheet(isPresented: $showFiles) {
@@ -112,18 +115,21 @@ struct SpaceView: View {
                 Text("Your scan is on its way").font(.title2.weight(.semibold))
                 Text("It appears here as soon as the server has it. You can close the app meanwhile.")
                     .multilineTextAlignment(.center).foregroundStyle(.secondary)
-            } else if RoomCaptureSession.isSupported || FreeScanController.isSupported {
+            } else if CaptureController.isSupported {
                 Text("Nothing scanned yet").font(.title2.weight(.semibold))
-                if RoomCaptureSession.isSupported {
-                    choice("Scan rooms", "A measured floor plan and a 3D model. Walk through every room.", "square.split.bottomrightquarter", .rooms)
-                }
-                if FreeScanController.isSupported {
-                    choice("Free scan", "A 3D model of anything: an object, a wall, a garden corner. No floor plan.", "cube.transparent", .free)
+                choice("Scan", wantPlan && CaptureController.canPlan
+                       ? "A 3D model in real colours and a measured floor plan, from one walk."
+                       : "A 3D model in real colours of anything: a room, an object, a garden corner.", "viewfinder")
+                if CaptureController.canPlan {
+                    Toggle("Floor plan too", isOn: $wantPlan).padding(.horizontal, 16)
                 }
             } else {
                 Text("This phone has no LiDAR").font(.title2.weight(.semibold))
                 Text("Scanning needs an iPhone Pro (12 Pro or newer). You can still open spaces others scanned.")
                     .multilineTextAlignment(.center).foregroundStyle(.secondary)
+            }
+            if !kept.isEmpty {
+                Button("\(kept.count) scan\(kept.count == 1 ? "" : "s") kept on this phone") { showKept = true }.glassButton()
             }
             if !coming {
                 Text("A scan films the walk with sound and records depth and camera positions, and uploads all of it to the Roomprint server.")
@@ -133,8 +139,12 @@ struct SpaceView: View {
         .padding(24)
     }
 
-    private func choice(_ title: String, _ what: String, _ icon: String, _ kind: ScanKind) -> some View {
-        Button { scanning = kind } label: {
+    private func scan(plan: Bool) {
+        capture = ScanStore.new(token: space.token, plan: plan && CaptureController.canPlan)
+    }
+
+    private func choice(_ title: String, _ what: String, _ icon: String) -> some View {
+        Button { scan(plan: wantPlan) } label: {
             HStack(spacing: 14) {
                 Image(systemName: icon).font(.title2).frame(width: 36)
                 VStack(alignment: .leading, spacing: 2) {
@@ -153,16 +163,18 @@ struct SpaceView: View {
 
     private func scanMenu<L: View>(@ViewBuilder label: () -> L) -> some View {
         Menu {
-            if RoomCaptureSession.isSupported {
-                Button { scanning = .rooms } label: { Label("Scan rooms", systemImage: "square.split.bottomrightquarter") }
+            Button { scan(plan: true) } label: { Label(CaptureController.canPlan ? "Scan with a floor plan" : "Scan", systemImage: "viewfinder") }
+            if CaptureController.canPlan {
+                Button { scan(plan: false) } label: { Label("Scan without a floor plan", systemImage: "cube.transparent") }
             }
-            if FreeScanController.isSupported {
-                Button { scanning = .free } label: { Label("Free scan", systemImage: "cube.transparent") }
+            if !kept.isEmpty {
+                Divider()
+                Button { showKept = true } label: { Label("Scans on this phone (\(kept.count))", systemImage: "iphone") }
             }
         } label: {
             label()
         }
-        .disabled(!RoomCaptureSession.isSupported && !FreeScanController.isSupported)
+        .disabled(!CaptureController.isSupported)
     }
 
     /// What the server and the uploads are doing, while they are doing something.
@@ -191,6 +203,7 @@ struct SpaceView: View {
     }
 
     private func load() async {
+        kept = ScanStore.list(token: space.token)
         do {
             summary = try await API.summary(base: space.base, token: space.token)
             error = nil
@@ -270,6 +283,83 @@ struct FilesSheet: View {
             onChange()
         } catch {
             self.error = "Could not delete it: \(error.localizedDescription)"
+        }
+    }
+}
+
+/// The scans of this space kept on this phone: upload one, continue it, or delete it.
+struct KeptSheet: View {
+    let space: SavedSpace
+    let scans: [KeptScan]
+    var onChange: () -> Void
+    var onContinue: (KeptScan) -> Void
+    @State private var busy: String?
+    @State private var error: String?
+    @State private var toDelete: KeptScan?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(scans) { s in
+                    Section {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(s.updated.formatted(date: .abbreviated, time: .shortened)).font(.headline)
+                            Text(Self.about(s)).font(.subheadline).foregroundStyle(.secondary)
+                            Text(s.uploaded.map { "Uploaded \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Not uploaded yet")
+                                .font(.footnote).foregroundStyle(s.uploaded == nil ? .orange : .secondary)
+                        }
+                        Button { upload(s) } label: {
+                            Label(busy == s.id ? "Queueing…" : s.uploaded == nil ? "Upload" : "Upload again", systemImage: "arrow.up.circle")
+                        }
+                        .disabled(busy != nil)
+                        if CaptureController.isSupported {
+                            Button { onContinue(s) } label: { Label("Continue scanning", systemImage: "viewfinder") }
+                        }
+                        Button(role: .destructive) { toDelete = s } label: { Label("Delete from this phone", systemImage: "trash") }
+                    }
+                }
+                if let error { Text(error).foregroundStyle(.red).font(.callout) }
+                Section {} footer: {
+                    Text("To continue a scan, start where you can see something you scanned before. Deleting here does not touch what is on the server.")
+                }
+            }
+            .navigationTitle("On this phone")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .confirmationDialog("Delete this scan from the phone?", isPresented: Binding(get: { toDelete != nil }, set: { if !$0 { toDelete = nil } }),
+                                titleVisibility: .visible, presenting: toDelete) { s in
+                Button("Delete", role: .destructive) {
+                    ScanStore.delete(s)
+                    onChange()
+                }
+            } message: { s in
+                Text(s.uploaded == nil ? "It was never uploaded, so it is gone for good." : "What was uploaded stays on the server; the scan can no longer be continued.")
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    static func about(_ s: KeptScan) -> String {
+        let t = Int(s.seconds)
+        var parts = [String(format: "%d:%02d", t / 60, t % 60), "\(Int(s.area)) m² of surface"]
+        if s.rooms > 0 { parts.append("\(s.rooms) room\(s.rooms == 1 ? "" : "s")") }
+        if s.segments > 1 { parts.append("continued \(s.segments - 1)×") }
+        parts.append(ByteCountFormatter.string(fromByteCount: ScanStore.bytes(s), countStyle: .file))
+        return parts.joined(separator: " · ")
+    }
+
+    private func upload(_ s: KeptScan) {
+        busy = s.id
+        Task {
+            do {
+                try await ScanStore.upload(s, to: space)
+                error = nil
+            } catch {
+                self.error = "Could not queue it: \(error.localizedDescription)"
+            }
+            busy = nil
+            onChange()
         }
     }
 }

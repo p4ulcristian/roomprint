@@ -11,12 +11,19 @@ import SwiftUI
 ///   model  the coloured model: a map from above in the corner, and the full-screen look
 ///   tint   the same surfaces as a light tint for the camera view (orange: seen too little)
 ///   hint   a line of advice (slow down, move closer, ...)
+///   arrow  which way to turn for the nearest gap that is out of sight
 ///
 /// Where the AR session gives no mesh (RoomPlan may keep it to itself), the model is
 /// drawn as points from the depth alone.
 @MainActor
 final class LiveScan: ObservableObject {
     @Published private(set) var hint: String?
+    /// Surface scanned so far, m² (rough).
+    @Published private(set) var area: Double = 0
+    /// The way to a gap that is out of sight, as an angle on the screen (0 is up, clockwise).
+    @Published private(set) var arrow: Double?
+    /// The map keeps to the few metres around the phone and turns with it; off, it shows the whole scan.
+    var follow = true
 
     let model = SCNScene()
     /// The scene of the free scan's camera view: the tint sits on the real surfaces.
@@ -30,6 +37,16 @@ final class LiveScan: ObservableObject {
     private typealias Piece = (model: SCNNode, tint: SCNNode, lo: SIMD3<Float>, hi: SIMD3<Float>)
     private let grid = VoxelGrid()
     private let cloud = SCNNode(), edges = SCNNode(), phone = SCNNode()
+    private let wallsSeen = SCNNode(), wallsMapped = SCNNode()
+    private var replayed = false
+    private var cloudBox: (lo: SIMD3<Float>, hi: SIMD3<Float>)?
+    private var heading = SIMD3<Float>(0, 0, -1)
+    private var began: TimeInterval?
+    private var lastCount: TimeInterval = 0, lastGap: TimeInterval = 0, lastTick: TimeInterval = 0
+    private var counted = 0
+    private var gap: SIMD3<Float>?, gapBefore: SIMD3<Float>?
+    private var lost = false
+    private let tick = UIImpactFeedbackGenerator(style: .soft), warn = UINotificationFeedbackGenerator()
     private var parts: [UUID: Piece] = [:]
     private var built: [UUID: ObjectIdentifier] = [:]
     private var anchors: [ARMeshAnchor] = []
@@ -50,7 +67,6 @@ final class LiveScan: ObservableObject {
             model.rootNode.addChildNode(cam)
         }
         mapCamera.camera?.usesOrthographicProjection = true
-        mapCamera.eulerAngles = SCNVector3(-Float.pi / 2, 0, 0)
         fullCamera.camera?.fieldOfView = 50
 
         // Where the phone is: a dot with a short beam the way it points.
@@ -64,7 +80,8 @@ final class LiveScan: ObservableObject {
         }
         phone.geometry = dot
         phone.addChildNode(beam)
-        for n in [cloud, edges, phone] { model.rootNode.addChildNode(n) }
+        for n in [cloud, edges, phone, wallsMapped] { model.rootNode.addChildNode(n) }
+        tint.rootNode.addChildNode(wallsSeen)
     }
 
     /// Called for every frame the recorder polls. `recording` is false while the scan is paused.
@@ -76,9 +93,15 @@ final class LiveScan: ObservableObject {
 
         phone.simdPosition = eye
         phone.eulerAngles = SCNVector3(0, atan2(-forward.x, -forward.z), 0)
-        phone.simdScale = SIMD3<Float>(repeating: max(0.07, reach * 0.045))
-        mapCamera.simdPosition = centre + SIMD3<Float>(0, 100, 0)
-        mapCamera.camera?.orthographicScale = Double(max(1.2, reach * 1.15))
+        phone.simdScale = SIMD3<Float>(repeating: follow ? 0.1 : max(0.07, reach * 0.045))
+        // The map looks straight down. Following, the way the phone points is up on it.
+        let flat = SIMD3<Float>(forward.x, 0, forward.z)
+        if simd_length(flat) > 0.25 { heading = simd_normalize(simd_mix(heading, simd_normalize(flat), SIMD3<Float>(repeating: 0.12))) }
+        let up = follow ? heading : SIMD3<Float>(0, 0, -1), back = SIMD3<Float>(0, 1, 0)
+        let over = (follow ? SIMD3<Float>(eye.x, centre.y, eye.z) : centre) + SIMD3<Float>(0, 100, 0)
+        mapCamera.simdTransform = simd_float4x4(SIMD4<Float>(simd_cross(up, back), 0), SIMD4<Float>(up, 0), SIMD4<Float>(back, 0), SIMD4<Float>(over, 1))
+        mapCamera.camera?.orthographicScale = Double(follow ? 2.6 : max(1.2, reach * 1.15))
+        if began == nil, recording { began = t }
 
         guard t - lastSample >= 0.2 else { return }
         lastSample = t
@@ -93,12 +116,80 @@ final class LiveScan: ObservableObject {
             lastMesh = t
             meshes(frame, eye: eye)
         }
+        if t - lastCount >= 1 {
+            lastCount = t
+            count(t, recording: recording)
+        }
+        steer(frame, eye: eye, forward: forward, recording: recording)
         let looking = fullView?.window != nil
-        if parts.isEmpty, t - lastModel >= (looking ? 0.3 : 1) {
+        if parts.isEmpty || replayed, t - lastModel >= (looking ? 0.3 : 1) {
             lastModel = t
             let above = centre + SIMD3<Float>(0, 100, 0)
             let from = looking ? fullView?.pointOfView?.presentation.simdWorldPosition ?? above : above
-            grid.model(from: from) { [weak self] shot in self?.show(shot) }
+            grid.model(from: from, oldOnly: !parts.isEmpty) { [weak self] shot in self?.show(shot) }
+        }
+    }
+
+    /// The numbers, and a tick in the hand for every bit of new surface: scanning something
+    /// new feels different from going over the same place again.
+    private func count(_ t: TimeInterval, recording: Bool) {
+        let n = grid.cells
+        let m2 = Double(n) * Double(VoxelGrid.size * VoxelGrid.size)
+        if abs(m2 - area) >= 0.5 { area = m2 }
+        if recording, n - counted >= 300, t - lastTick > 0.35 {
+            lastTick = t
+            tick.impactOccurred(intensity: 0.6)
+        }
+        counted = n
+    }
+
+    /// Finds the nearest sizeable gap now and then, and points to it while it is out of sight.
+    private func steer(_ frame: ARFrame, eye: SIMD3<Float>, forward: SIMD3<Float>, recording: Bool) {
+        let t = frame.timestamp
+        if recording, !parts.isEmpty, let began, t - began > 20, t - lastGap >= 2 {
+            lastGap = t
+            grid.gap(near: eye) { [weak self] found in
+                guard let self else { return }
+                // only a gap found twice running: the mesh's edge flickers where it is still growing
+                if let found, let b = self.gapBefore, simd_length(found - b) < 0.7 { self.gap = found } else { self.gap = nil }
+                self.gapBefore = found
+            }
+        }
+        var angle: Double?
+        if recording, let gap, simd_dot(simd_normalize(gap - eye), forward) < 0.45 {
+            let v = frame.camera.viewMatrix(for: .portrait) * SIMD4<Float>(gap, 1)
+            angle = (Double(atan2(v.x, v.y)) * 8).rounded() / 8
+        }
+        if angle != arrow { arrow = angle }
+    }
+
+    /// Brings back what an earlier session of this scan saw, so its coverage shows when the
+    /// scan is continued. It is drawn as points: ARKit only meshes what it sees this time.
+    func replay(_ url: URL) {
+        replayed = true
+        let grid = grid
+        Task.detached(priority: .utility) { VoxelGrid.read(url) { grid.addOld($0) } }
+    }
+
+    /// RoomPlan's walls, doors and windows so far, drawn into the camera view and the map.
+    func plan(_ surfaces: [(transform: simd_float4x4, size: SIMD3<Float>, opening: Bool)]) {
+        for n in wallsSeen.childNodes + wallsMapped.childNodes { n.removeFromParentNode() }
+        for s in surfaces {
+            let seen = SCNBox(width: CGFloat(s.size.x), height: CGFloat(s.size.y), length: 0.03, chamferRadius: 0)
+            seen.firstMaterial?.lightingModel = .constant
+            seen.firstMaterial?.diffuse.contents = s.opening ? UIColor.systemBlue : UIColor.white
+            seen.firstMaterial?.transparency = s.opening ? 0.3 : 0.14
+            seen.firstMaterial?.isDoubleSided = true
+            seen.firstMaterial?.writesToDepthBuffer = false
+            let a = SCNNode(geometry: seen)
+            a.simdTransform = s.transform
+            wallsSeen.addChildNode(a)
+            let mapped = SCNBox(width: CGFloat(s.size.x), height: CGFloat(s.size.y), length: 0.09, chamferRadius: 0)
+            mapped.firstMaterial?.lightingModel = .constant
+            mapped.firstMaterial?.diffuse.contents = s.opening ? UIColor.systemBlue : UIColor.white
+            let b = SCNNode(geometry: mapped)
+            b.simdTransform = s.transform
+            wallsMapped.addChildNode(b)
         }
     }
 
@@ -124,7 +215,7 @@ final class LiveScan: ObservableObject {
         guard !now.isEmpty else { return }
         anchors = now
         guard !meshing else { return }
-        cloud.geometry = nil
+        if !replayed { cloud.geometry = nil }
         let here = Set(now.map(\.identifier))
         let gone = parts.keys.filter { !here.contains($0) }
         for id in gone {
@@ -187,6 +278,10 @@ final class LiveScan: ObservableObject {
             lo = simd_min(lo, p.lo)
             hi = simd_max(hi, p.hi)
         }
+        if let c = cloudBox {
+            lo = simd_min(lo, c.lo)
+            hi = simd_max(hi, c.hi)
+        }
         fit(lo, hi)
     }
 
@@ -197,9 +292,11 @@ final class LiveScan: ObservableObject {
     }
 
     private func show(_ shot: VoxelGrid.Model) {
-        guard parts.isEmpty else { return }
+        guard parts.isEmpty || replayed else { return }
         cloud.geometry = Self.points(shot)
-        if shot.count > 0 { fit(shot.lo, shot.hi) }
+        guard shot.count > 0 else { return }
+        cloudBox = (shot.lo, shot.hi)
+        if parts.isEmpty { fit(shot.lo, shot.hi) } else { frameModel() }
     }
 
     private static func source(_ data: Data, _ semantic: SCNGeometrySource.Semantic, count: Int) -> SCNGeometrySource {
@@ -262,6 +359,11 @@ final class LiveScan: ObservableObject {
         default: now = "Lost my place. Hold still for a moment."
         }
         if !recording { now = nil }
+        var isLost = false
+        if case .limited(let why) = frame.camera.trackingState, case .relocalizing = why { isLost = true }
+        if case .notAvailable = frame.camera.trackingState { isLost = true }
+        if isLost, !lost, recording { warn.notificationOccurred(.warning) }
+        lost = isLost
         // A line stays up for a moment after its reason has gone, so it can be read.
         if let now {
             hintSince = t
@@ -310,9 +412,13 @@ final class VoxelGrid: @unchecked Sendable {
     private var index: [Int64: Int32] = [:]
     private var pos: [SIMD3<Float>] = [], col: [SIMD3<Float>] = [], dir: [SIMD3<Float>] = []
     private var hits: [UInt16] = []
-    private var shapes: [UUID: (pos: [SIMD3<Float>], idx: [UInt32])] = [:]
+    private var old: [Bool] = []          // seen in an earlier session of a scan that is being continued
+    private var shapes: [UUID: (pos: [SIMD3<Float>], idx: [UInt32], lo: SIMD3<Float>, hi: SIMD3<Float>)] = [:]
     private let lock = NSLock()
     private var waiting = 0
+    private var _cells = 0
+    /// Cells seen so far.
+    var cells: Int { lock.withLock { _cells } }
 
     private static func key(_ p: SIMD3<Float>, cell: Float) -> Int64 {
         let g = (p / cell).rounded(.down)
@@ -329,28 +435,40 @@ final class VoxelGrid: @unchecked Sendable {
         if behind { return }
         queue.async { [self] in
             defer { lock.withLock { waiting -= 1 } }
-            let eye = SIMD3<Float>(s.T.columns.3.x, s.T.columns.3.y, s.T.columns.3.z)
-            for i in s.points.indices {
-                let p4 = s.T * SIMD4<Float>(s.points[i], 1)
-                let p = SIMD3<Float>(p4.x, p4.y, p4.z)
-                let k = Self.key(p, cell: Self.size)
-                let to = simd_normalize(eye - p)
-                if let j = index[k] {
-                    let c = Int(j)
-                    let w = 1 / (Float(min(hits[c], 30)) + 1)
-                    pos[c] += (p - pos[c]) * w
-                    col[c] += (s.colours[i] - col[c]) * w
-                    dir[c] += (to - dir[c]) * w
-                    if hits[c] < .max { hits[c] += 1 }
-                } else if pos.count < Self.limit {
-                    index[k] = Int32(pos.count)
-                    pos.append(p)
-                    col.append(s.colours[i])
-                    dir.append(to)
-                    hits.append(1)
-                }
+            take(s, old: false)
+        }
+    }
+
+    /// A frame of an earlier session, read back from its depth file.
+    func addOld(_ s: Sample) {
+        queue.sync { take(s, old: true) }
+    }
+
+    private func take(_ s: Sample, old was: Bool) {
+        let eye = SIMD3<Float>(s.T.columns.3.x, s.T.columns.3.y, s.T.columns.3.z)
+        for i in s.points.indices {
+            let p4 = s.T * SIMD4<Float>(s.points[i], 1)
+            let p = SIMD3<Float>(p4.x, p4.y, p4.z)
+            let k = Self.key(p, cell: Self.size)
+            let to = simd_normalize(eye - p)
+            if let j = index[k] {
+                let c = Int(j)
+                let w = 1 / (Float(min(hits[c], 30)) + 1)
+                pos[c] += (p - pos[c]) * w
+                col[c] += (s.colours[i] - col[c]) * w
+                dir[c] += (to - dir[c]) * w
+                if hits[c] < .max { hits[c] += 1 }
+            } else if pos.count < Self.limit {
+                index[k] = Int32(pos.count)
+                pos.append(p)
+                col.append(s.colours[i])
+                dir.append(to)
+                hits.append(1)
+                old.append(was)
             }
         }
+        let n = pos.count
+        lock.withLock { _cells = n }
     }
 
     /// The cell a mesh vertex lies in, or failing that one right next to it: ARKit smooths
@@ -405,7 +523,7 @@ final class VoxelGrid: @unchecked Sendable {
                     let src = raw.assumingMemoryBound(to: UInt16.self)
                     for i in 0..<corners { idx[i] = UInt32(src[i]) }
                 }
-                shapes[a.identifier] = (p, idx)
+                shapes[a.identifier] = (p, idx, lo, hi)
                 out.append(Part(id: a.identifier, positions: Self.data(p), colours: Self.data(c), tints: Self.data(t),
                                 indices: idx.withUnsafeBufferPointer { Data(buffer: $0) }, vertices: n, faces: faces, lo: lo, hi: hi))
             }
@@ -422,8 +540,9 @@ final class VoxelGrid: @unchecked Sendable {
 
     /// Every edge of every triangle, with its two ends; an edge is named by where its ends
     /// are (to 1 cm), so the same edge in two of ARKit's pieces is one edge.
-    private func eachEdge(_ body: (Edge, SIMD3<Float>, SIMD3<Float>) -> Void) {
+    private func eachEdge(near: SIMD3<Float>? = nil, within: Float = 0, _ body: (Edge, SIMD3<Float>, SIMD3<Float>) -> Void) {
         for s in shapes.values {
+            if let near, simd_length(simd_max(simd_max(s.lo - near, near - s.hi), SIMD3<Float>(repeating: 0))) > within { continue }
             let keys = s.pos.map { Self.key($0 + 0.005, cell: 0.01) }
             var f = 0
             while f + 2 < s.idx.count {
@@ -457,15 +576,38 @@ final class VoxelGrid: @unchecked Sendable {
         }
     }
 
+    /// The middle of the biggest gap within a few steps of `eye`: where the most open
+    /// edge lies in one half-metre block. Nil if there is none worth walking to.
+    func gap(near eye: SIMD3<Float>, then: @escaping @MainActor (SIMD3<Float>?) -> Void) {
+        queue.async { [self] in
+            var seen = [Edge: UInt8]()
+            eachEdge(near: eye, within: 4.5) { e, _, _ in seen[e] = min(2, (seen[e] ?? 0) + 1) }
+            var blocks = [Int64: (length: Float, sum: SIMD3<Float>, n: Float)]()
+            eachEdge(near: eye, within: 4.5) { e, p, q in
+                guard seen[e] == 1 else { return }
+                let mid = (p + q) / 2, far = simd_length(mid - eye)
+                guard far > 0.7, far < 3.5 else { return }   // farther out the pieces around are not all counted
+                var b = blocks[Self.key(mid, cell: 0.5)] ?? (0, SIMD3<Float>(repeating: 0), 0)
+                b.length += simd_length(p - q)
+                b.sum += mid
+                b.n += 1
+                blocks[Self.key(mid, cell: 0.5)] = b
+            }
+            let best = blocks.values.max { $0.length < $1.length }
+            let found = best.flatMap { $0.length >= 1.5 ? $0.sum / $0.n : nil }
+            Task { @MainActor in then(found) }
+        }
+    }
+
     /// The cells as points seen from `eye`: those facing away are left out, so a room is
     /// looked into through its ceiling and its near walls.
-    func model(from eye: SIMD3<Float>, then: @escaping @MainActor (Model) -> Void) {
+    func model(from eye: SIMD3<Float>, oldOnly: Bool = false, then: @escaping @MainActor (Model) -> Void) {
         queue.async { [self] in
             var p = [SIMD3<Float>](), c = [SIMD3<Float>]()
             p.reserveCapacity(pos.count / 2)
             c.reserveCapacity(pos.count / 2)
             var lo = SIMD3<Float>(repeating: .infinity), hi = SIMD3<Float>(repeating: -.infinity)
-            for i in pos.indices where hits[i] >= 2 {
+            for i in pos.indices where hits[i] >= 2 && (!oldOnly || old[i]) {
                 lo = simd_min(lo, pos[i])
                 hi = simd_max(hi, pos[i])
                 if simd_dot(dir[i], eye - pos[i]) > 0 {
@@ -532,5 +674,51 @@ final class VoxelGrid: @unchecked Sendable {
         }
         let mid = (dbase + (h / 2) * drow).assumingMemoryBound(to: Float32.self)[w / 2]
         return Sample(points: points, colours: colours, T: frame.camera.transform, centre: mid.isFinite && mid > 0 ? mid : nil)
+    }
+
+    /// Reads a depth file back (DepthLog's format), a frame at a time, thinned like live frames.
+    static func read(_ url: URL, each: (Sample) -> Void) {
+        guard let fh = try? FileHandle(forReadingFrom: url), (try? fh.read(upToCount: 4)) == Data("RPD1".utf8) else { return }
+        defer { try? fh.close() }
+        while let lead = try? fh.read(upToCount: 4), lead.count == 4 {
+            let n = Int(lead.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })
+            guard let hj = try? fh.read(upToCount: n), hj.count == n,
+                  let h = try? JSONSerialization.jsonObject(with: hj) as? [String: Any],
+                  let w = h["w"] as? Int, let hh = h["h"] as? Int, let iw = h["iw"] as? Int, let ih = h["ih"] as? Int,
+                  let K = (h["K"] as? [NSNumber])?.map(\.floatValue), K.count == 9,
+                  let T = (h["T"] as? [NSNumber])?.map(\.floatValue), T.count == 16,
+                  let dz = h["dz"] as? Int, let cz = h["cz"] as? Int, let jz = h["jz"] as? Int,
+                  let draw = try? fh.read(upToCount: dz), draw.count == dz,
+                  let craw = try? fh.read(upToCount: cz), craw.count == cz,
+                  let jpeg = try? fh.read(upToCount: jz), jpeg.count == jz else { return }
+            guard let depth = try? (draw as NSData).decompressed(using: .zlib) as Data, depth.count == w * hh * 2,
+                  let trust = try? (craw as NSData).decompressed(using: .zlib) as Data, trust.count == w * hh,
+                  let image = UIImage(data: jpeg)?.cgImage else { continue }
+            let jw = image.width, jh = image.height
+            var pixels = [UInt8](repeating: 0, count: jw * jh * 4)
+            guard let ctx = CGContext(data: &pixels, width: jw, height: jh, bitsPerComponent: 8, bytesPerRow: jw * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { continue }
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: jw, height: jh))
+            let sx = Float(w) / Float(iw), sy = Float(hh) / Float(ih)
+            let fx = K[0] * sx, fy = K[4] * sy, cx = K[2] * sx, cy = K[5] * sy
+            var points = [SIMD3<Float>](), colours = [SIMD3<Float>]()
+            depth.withUnsafeBytes { (d: UnsafeRawBufferPointer) in
+                for y in stride(from: 1, to: hh, by: 2) {
+                    for x in stride(from: 1, to: w, by: 2) {
+                        let z = Float(d.loadUnaligned(fromByteOffset: (y * w + x) * 2, as: Float16.self))
+                        guard z.isFinite, z > 0.15, z < 5 else { continue }
+                        let c = trust[trust.startIndex + y * w + x]
+                        if c == 0 || (c == 1 && z > 3) { continue }
+                        let o = (min(jh - 1, y * jh / hh) * jw + min(jw - 1, x * jw / w)) * 4
+                        let rgb = SIMD3<Float>(Float(pixels[o]), Float(pixels[o + 1]), Float(pixels[o + 2])) / 255
+                        colours.append(rgb * rgb)
+                        points.append(SIMD3<Float>((Float(x) - cx) / fx * z, -(Float(y) - cy) / fy * z, -z))
+                    }
+                }
+            }
+            let m = simd_float4x4(SIMD4<Float>(T[0], T[1], T[2], T[3]), SIMD4<Float>(T[4], T[5], T[6], T[7]),
+                                  SIMD4<Float>(T[8], T[9], T[10], T[11]), SIMD4<Float>(T[12], T[13], T[14], T[15]))
+            each(Sample(points: points, colours: colours, T: m, centre: nil))
+        }
     }
 }

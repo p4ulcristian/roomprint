@@ -27,8 +27,12 @@ final class DepthLog: @unchecked Sendable {
     private var _count = 0
     var count: Int { lock.withLock { _count } }
 
-    init(url: URL) {
+    /// A scan continued later goes on in the same file: `offset` is how long it already is.
+    private let offset: TimeInterval
+
+    init(url: URL, offset: TimeInterval = 0) {
         self.url = url
+        self.offset = offset
     }
 
     /// Called for every polled frame; keeps one every `interval` while tracking is good.
@@ -45,7 +49,7 @@ final class DepthLog: @unchecked Sendable {
         if first == nil { first = frame.timestamp }
 
         // Copy what is needed now; the camera image is only held until the JPEG is made.
-        let t = frame.timestamp - (first ?? frame.timestamp)
+        let t = offset + frame.timestamp - (first ?? frame.timestamp)
         let d = Self.float16(depth.depthMap)
         let c = depth.confidenceMap.map(Self.bytes) ?? Data(count: d.w * d.h)
         let image = frame.capturedImage
@@ -71,7 +75,9 @@ final class DepthLog: @unchecked Sendable {
             guard let hj = try? JSONSerialization.data(withJSONObject: header) else { return }
             do {
                 if handle == nil {
-                    FileManager.default.createFile(atPath: url.path, contents: Data("RPD1".utf8))
+                    if !FileManager.default.fileExists(atPath: url.path) {
+                        FileManager.default.createFile(atPath: url.path, contents: Data("RPD1".utf8))
+                    }
                     handle = try FileHandle(forWritingTo: url)
                     try handle?.seekToEnd()
                 }
@@ -88,7 +94,7 @@ final class DepthLog: @unchecked Sendable {
         }
     }
 
-    /// Waits for the last frame and closes the file; nil if no depth was ever seen.
+    /// Waits for the last frame and closes the file; nil if it holds no depth at all.
     func finish() async -> URL? {
         await withCheckedContinuation { (k: CheckedContinuation<Void, Never>) in
             queue.async { [self] in
@@ -97,7 +103,8 @@ final class DepthLog: @unchecked Sendable {
                 k.resume()
             }
         }
-        return count > 0 ? url : nil
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
+        return size > 4 ? url : nil
     }
 
     private static func float16(_ pb: CVPixelBuffer) -> (data: Data, w: Int, h: Int) {

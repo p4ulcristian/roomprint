@@ -30,6 +30,11 @@ final class PoseLog: @unchecked Sendable {
         let floats: [Float] = [K[0][0], K[1][1], K[2][0], K[2][1]] + (0..<4).flatMap { col in (0..<4).map { T[col][$0] } }
         for v in floats { withUnsafeBytes(of: v.bitPattern.littleEndian) { rec.append(contentsOf: $0) } }
         queue.async { [self] in
+            if handle == nil, FileManager.default.fileExists(atPath: url.path) {
+                // a scan continued later: its poses go on in the same file
+                handle = try? FileHandle(forWritingTo: url)
+                _ = try? handle?.seekToEnd()
+            }
             if handle == nil {
                 let head = (try? JSONSerialization.data(withJSONObject: ["iw": Int(size.width), "ih": Int(size.height)])) ?? Data()
                 var start = Data("RPP1".utf8)
@@ -57,7 +62,8 @@ final class PoseLog: @unchecked Sendable {
                 flush()
                 try? handle?.close()
                 handle = nil
-                k.resume(returning: count > 0 ? url : nil)
+                let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
+                k.resume(returning: count > 0 || size > 100 ? url : nil)
             }
         }
     }

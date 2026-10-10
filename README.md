@@ -72,15 +72,25 @@ viewer's Crop tool sets it. The viewer also measures between any two tapped poin
 
 ## iOS app (`ios/`)
 
-LiDAR room scans with Apple's RoomPlan, uploaded to an invite as a `.roomplan` file
-that `worker/roomplan.py` turns into `space.json` without the GPU. A second mode, Free
-scan, records the same video, depth and poses without RoomPlan, for things that are not
-rooms. While scanning, both modes show the scan so far (`LiveScan.swift`): ARKit's
-live mesh coloured from the depth frames (points from the depth alone where the session
-gives no mesh), as a map from above in a corner and full screen to turn around before
-uploading, with the edges of holes marked. The free scan also tints scanned surfaces in
-the camera view (orange where they were seen too little). A line of advice shows when
-moving too fast, too far away or in the dark. The space's page in the app is the
+One scan screen (`Capture.swift`): the walk is filmed with sound, and its LiDAR depth
+and camera poses recorded; with "Floor plan too" on, Apple's RoomPlan runs beside it on
+the same AR session, so one walk gives the coloured 3D model and the measured floor plan
+(`.roomplan`, which `worker/roomplan.py` turns into `space.json` without the GPU).
+Without rooms the scan is a free scan (`.freescan`): a model of anything, no plan.
+
+While scanning, the scan so far shows (`LiveScan.swift`): ARKit's live mesh coloured
+from the depth frames, as a tint on the surfaces in the camera view (orange where seen
+too little) and as a map from above that follows the phone, with RoomPlan's walls drawn
+in. A line of advice shows when moving too fast, too far away or in the dark, an arrow
+points to a gap that is out of sight, and new surface ticks in the hand. "Done" shows
+the model full screen with the edges of holes marked; from there: scan more, upload, or
+keep on the phone.
+
+Every scan is kept on the phone (`ScanStore.swift`) with ARKit's map of the place, so
+it can be uploaded later, uploaded again, or continued another day: the app finds the
+place again from the map and the new part lands in the same coordinates. A continued
+scan's depth and poses go on in the same files and its videos are joined before upload,
+so the server sees one scan. The space's page in the app is the
 web viewer in a web view; exports and files tapped there are downloaded by the app and
 handed to the share sheet (a USDZ opens in AR Quick Look). The interface uses Liquid
 Glass on iOS 26 and the blur material on iOS 17 and 18. Uploads run in an
