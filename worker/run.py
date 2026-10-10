@@ -3,6 +3,8 @@
   python run.py watch              process queued spaces forever (one at a time)
   python run.py process <space_id> process one space now, whatever its state
   python run.py mesh <space_id>    fuse the space's newest LiDAR depth file again
+  python run.py texture <space_id> paint the fused mesh from the photos again
+  python run.py splat <space_id>   train the space's Gaussian splat now
 
 Reads/writes DATA_DIR/spaces/<id>/ (contract in web/store.ts). The model is loaded
 per job and freed afterwards so the GPU is only held while a job runs. A job only
@@ -24,6 +26,7 @@ import numpy as np
 DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 SPACES = DATA_DIR / "spaces"
 NEED_VRAM_MB = int(os.environ.get("NEED_VRAM_MB", "10000"))
+SPLAT_VRAM_MB = int(os.environ.get("SPLAT_VRAM_MB", "6000"))
 VIDEO_EXT = {".mov", ".mp4", ".m4v", ".webm", ".mkv", ".avi"}
 
 
@@ -111,8 +114,18 @@ def merge_spaces(parts: list[dict]) -> dict:
     return out
 
 
+SCAN_EXT = {".roomplan", ".freescan"}   # the app's scans: already measured, no GPU needed
+
+
 def has_scan(space_id: str) -> bool:
-    return any((SPACES / space_id / "uploads").glob("*.roomplan"))
+    return any(p.suffix in SCAN_EXT for p in (SPACES / space_id / "uploads").iterdir())
+
+
+def free_space(meta: dict) -> dict:
+    """space.json of a free scan: no rooms or walls, only the real scan. worker/fuse.py
+    places it (lidar_frame) once the depth has been fused."""
+    return {"version": 1, "id": meta["id"], "name": meta["name"], "kind": "free", "rooms": [], "walls": [],
+            "openings": [], "objects": [], "scale": {"source": "lidar", "factor": 1.0}, "lidar_frame": {"auto": True}}
 
 
 def process(space_id: str):
@@ -126,16 +139,20 @@ def process(space_id: str):
              for c in clips}
     # A RoomPlan scan from the app is already measured: convert it, no GPU, and it wins
     # over any video in the same space (the newest scan if there are several).
-    scans = [c for c in clips if files[c["id"]].suffix.lower() == ".roomplan"]
+    scans = [c for c in clips if files[c["id"]].suffix.lower() in SCAN_EXT]
     if scans:
         import roomplan
         set_status(d, "processing", "reading the LiDAR scan", 0.5)
-        space = roomplan.convert(read_json(files[scans[-1]["id"]]))
-        space["id"] = meta["id"]
-        space["name"] = meta["name"]
+        if files[scans[-1]["id"]].suffix.lower() == ".freescan":
+            space = free_space(meta)
+        else:
+            space = roomplan.convert(read_json(files[scans[-1]["id"]]))
+            space["id"] = meta["id"]
+            space["name"] = meta["name"]
         write_json(d / "space.json", space)
         (d / "preview.ply").unlink(missing_ok=True)  # an older video's cloud would not line up
-        set_status(d, "done", f"{len(space['rooms'])} rooms", 1.0)
+        drop_derived(d)                              # and so would a model of the scan before
+        set_status(d, "done", "free scan" if space.get("kind") == "free" else f"{len(space['rooms'])} rooms", 1.0)
         return
 
     videos = [c for c in clips if files[c["id"]].suffix.lower() in VIDEO_EXT]
@@ -211,7 +228,7 @@ def needs_mesh():
     out = []
     for d in sorted(SPACES.glob("*")):
         rgbd = sorted((d / "uploads").glob("*.rgbd"), key=lambda p: p.stat().st_mtime)
-        if not rgbd:
+        if not rgbd or uploading(d):   # a new scan's depth may still be on its way
             continue
         st = read_json(d / "status.json") or {}
         if st.get("state") != "done" or "lidar_frame" not in (read_json(d / "space.json") or {}):
@@ -223,32 +240,136 @@ def needs_mesh():
     return out
 
 
-def build_mesh(space_id: str, rgbd: Path):
-    import fuse
+DERIVED = ("mesh.ply", "mesh.failed", "textured.glb", "textured.failed", "splat.ply", "splat.splat", "splat.failed")
+
+
+def drop_derived(d: Path):
+    """Everything made from a scan's depth and photos; made again for the scan that replaces it."""
+    for f in DERIVED:
+        (d / f).unlink(missing_ok=True)
+    shutil.rmtree(d / "exports", ignore_errors=True)
+
+
+def side_job(space_id: str, what: str, out: str, fn):
+    """A step after the floor plan is done (mesh, texture, splat). It reports progress in
+    the space's status but leaves the floor plan's own result line alone; a failure is
+    remembered in <out>.failed so it is not tried again until the inputs change."""
     d = SPACES / space_id
-    st = read_json(d / "status.json") or {}
-    step = st.get("step", "")
-    tmp = d / "mesh.tmp.ply"   # Open3D picks the format from the extension
+    step = (read_json(d / "status.json") or {}).get("step", "")
+    failed = (d / out).with_suffix(".failed")
     try:
-        set_status(d, "processing", "building the 3D model from the depth", 0.1)
-        info = fuse.fuse(rgbd, read_json(d / "space.json")["lidar_frame"], tmp,
-                         progress=lambda p: set_status(d, "processing", "building the 3D model from the depth", p))
-        tmp.replace(d / "mesh.ply")
-        (d / "mesh.failed").unlink(missing_ok=True)
-        print(f"[{space_id}] mesh: {info}", flush=True)
+        set_status(d, "processing", what, 0.05)
+        info = fn(d, lambda p, s=what: set_status(d, "processing", s, p))
+        failed.unlink(missing_ok=True)
+        shutil.rmtree(d / "exports", ignore_errors=True)   # they were made from the model before
+        print(f"[{space_id}] {out}: {info}", flush=True)
     except Exception as e:
         traceback.print_exc()
-        tmp.unlink(missing_ok=True)
-        (d / "mesh.failed").write_text(str(e))
+        failed.write_text(str(e))
     set_status(d, "done", step, 1.0)  # the floor plan is unaffected either way
 
 
+def build_mesh(space_id: str, rgbd: Path):
+    def fn(d, progress):
+        import fuse
+        space = read_json(d / "space.json")
+        tmp = d / "mesh.tmp.ply"   # Open3D picks the format from the extension
+        try:
+            info = fuse.fuse(rgbd, space["lidar_frame"], tmp, progress=progress)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+        if space["lidar_frame"].get("auto"):   # a free scan: fuse chose where the plan's origin is
+            space["lidar_frame"] = info["frame"]
+            space["bounds"] = info["bounds"]
+            write_json(d / "space.json", space)
+        tmp.replace(d / "mesh.ply")
+        return info
+    side_job(space_id, "building the 3D model from the depth", "mesh.ply", fn)
+
+
+def uploading(d: Path) -> bool:
+    """Files are still arriving (the video is the last and biggest). A stalled upload
+    stops holding things up after an hour."""
+    return any(time.time() - p.stat().st_mtime < 3600 for p in (d / "incoming").glob("*.part"))
+
+
+def newer(target: Path, inputs: list[Path]) -> bool:
+    """target (or its .failed note) exists and is not older than any input."""
+    made = [p for p in (target, target.with_suffix(".failed")) if p.exists()]
+    return bool(made) and max(p.stat().st_mtime for p in made) >= max(p.stat().st_mtime for p in inputs)
+
+
+def photo_inputs(d: Path) -> list[Path]:
+    import views
+    (video, poses), rgbd = views.sources(d)
+    return [p for p in (video, poses, rgbd) if p]
+
+
+def needs_texture():
+    """Spaces whose fused mesh has not been painted from the newest photos yet."""
+    out = []
+    for d in sorted(SPACES.glob("*")):
+        if not (d / "mesh.ply").exists() or uploading(d):
+            continue
+        inputs = photo_inputs(d)
+        if inputs and not newer(d / "textured.glb", inputs + [d / "mesh.ply"]):
+            out.append(d.name)
+    return out
+
+
+def build_texture(space_id: str):
+    def fn(d, progress):
+        # Its own process: when it exits, every byte of VRAM it used is free again, which a
+        # long-lived worker that once touched the GPU never quite manages.
+        proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("texture.py")), str(d)],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        said = []
+        for line in proc.stdout:
+            pct, _, what = line.strip().partition("% ")
+            if pct.isdigit():
+                progress(int(pct) / 100, what)
+            elif line.strip():
+                said = (said + [line.strip()])[-5:]
+        if proc.wait() != 0:
+            raise RuntimeError(said[-1] if said else "the texture step failed")
+        return said[-1] if said else ""
+    side_job(space_id, "painting the 3D model from the photos", "textured.glb", fn)
+
+
+def needs_splat():
+    """Spaces someone asked a Gaussian splat for (splat.request, web/server.ts)."""
+    out = []
+    for d in sorted(SPACES.glob("*")):
+        if (d / "splat.request").exists() and (d / "mesh.ply").exists() and not uploading(d):
+            inputs = photo_inputs(d)
+            if inputs and not newer(d / "splat.ply", inputs + [d / "splat.request"]):
+                out.append(d.name)
+    return out
+
+
+def build_splat(space_id: str):
+    def fn(d, progress):
+        import splat
+        return splat.build(d, progress=progress)
+    side_job(space_id, "training the Gaussian splat", "splat.ply", fn)
+
+
 def queued():
+    """Spaces waiting for process(): the ones the server queued, and the ones whose newest
+    scan arrived while a model was being built for the scan before (the server leaves a
+    space alone while it is being processed)."""
     out = []
     for d in sorted(SPACES.glob("*")):
         st = read_json(d / "status.json")
-        if st and st.get("state") == "queued":
+        if not st:
+            continue
+        if st.get("state") == "queued":
             out.append((st.get("updated", ""), d.name))
+        elif st.get("state") == "done" and (d / "space.json").exists():
+            scans = [p.stat().st_mtime for p in (d / "uploads").iterdir() if p.suffix in SCAN_EXT]
+            if scans and max(scans) > (d / "space.json").stat().st_mtime:
+                out.append((st.get("updated", ""), d.name))
     return [sid for _, sid in sorted(out)]
 
 
@@ -277,6 +398,12 @@ def watch():
                 waiting_note = q[0]
         for space_id, rgbd in needs_mesh():
             build_mesh(space_id, rgbd)
+        for space_id in needs_texture():
+            build_texture(space_id)
+        # A splat trains on the GPU for minutes: one per round, and only when it is free.
+        want = needs_splat()
+        if want and free_vram_mb() >= SPLAT_VRAM_MB:
+            build_splat(want[0])
         time.sleep(10)
 
 
@@ -289,6 +416,10 @@ if __name__ == "__main__":
     elif len(sys.argv) == 3 and sys.argv[1] == "mesh":
         rgbd = sorted((SPACES / sys.argv[2] / "uploads").glob("*.rgbd"), key=lambda p: p.stat().st_mtime)
         build_mesh(sys.argv[2], rgbd[-1]) if rgbd else print("no depth file")
+    elif len(sys.argv) == 3 and sys.argv[1] == "texture":
+        build_texture(sys.argv[2])
+    elif len(sys.argv) == 3 and sys.argv[1] == "splat":
+        build_splat(sys.argv[2])
     else:
         print(__doc__)
         sys.exit(2)

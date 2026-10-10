@@ -28,6 +28,27 @@ MAX_TRIANGLES = 600_000
 MIN_PIECE = 200     # triangles; smaller floating bits are noise
 
 
+def records(path: Path, jpeg=False):
+    """Yield (header, JPEG bytes or None) per frame without unpacking the depth."""
+    with open(path, "rb") as f:
+        if f.read(4) != b"RPD1":
+            raise ValueError("not a Roomprint depth file")
+        while True:
+            n = f.read(4)
+            if len(n) < 4:
+                return
+            h = json.loads(f.read(struct.unpack("<I", n)[0]))
+            f.seek(h["dz"] + h["cz"], 1)
+            if not jpeg:
+                f.seek(h["jz"], 1)
+                yield h, None
+                continue
+            jz = f.read(h["jz"])
+            if len(jz) < h["jz"]:
+                return  # cut off mid-record
+            yield h, jz
+
+
 def frames(path: Path):
     """Yield (header, depth m (h, w) float32, confidence (h, w) uint8, rgb (jh, jw, 3))."""
     with open(path, "rb") as f:
@@ -89,15 +110,32 @@ def fuse(path: Path, frame: dict, out: Path, progress=lambda p: None) -> dict:
         mesh = mesh.simplify_quadric_decimation(MAX_TRIANGLES)
     progress(0.95)
 
+    v = np.asarray(mesh.vertices)
+    if frame.get("auto"):
+        # A free scan has no floor plan to sit on: the plan's origin goes under the middle
+        # of what was scanned, at its lowest surface.
+        frame = {"theta": 0.0, "floor_y": round(float(np.percentile(v[:, 1], 0.5)), 4),
+                 "origin": [round(float(v[:, 0].min() + v[:, 0].max()) / 2, 4),
+                            round(float(-v[:, 2].min() - v[:, 2].max()) / 2, 4)]}
     # ARKit world -> floor plan: plan xy = rotate([x, -z], theta) - origin, height = y - floor_y
     th = frame["theta"]
     R = np.array([[math.cos(th), -math.sin(th)], [math.sin(th), math.cos(th)]])
-    v = np.asarray(mesh.vertices)
     xy = np.stack([v[:, 0], -v[:, 2]], 1) @ R.T - np.array(frame["origin"])
     mesh.vertices = o3d.utility.Vector3dVector(np.column_stack([xy, v[:, 1] - frame["floor_y"]]))
     mesh.compute_vertex_normals()
     o3d.io.write_triangle_mesh(str(out), mesh, write_ascii=False, compressed=False, write_vertex_normals=False)
-    return {"frames": used, "triangles": len(mesh.triangles)}
+    lo, hi = np.asarray(mesh.vertices).min(0), np.asarray(mesh.vertices).max(0)
+    return {"frames": used, "triangles": len(mesh.triangles), "frame": frame,
+            "bounds": [[round(float(x), 3) for x in lo], [round(float(x), 3) for x in hi]]}
+
+
+def to_plan(frame: dict) -> np.ndarray:
+    """4x4 from ARKit world coordinates to the plan's (x, y on the floor, z up)."""
+    c, s = math.cos(frame["theta"]), math.sin(frame["theta"])
+    M = np.eye(4)
+    M[:3, :3] = [[c, 0, s], [s, 0, -c], [0, 1, 0]]
+    M[:3, 3] = [-frame["origin"][0], -frame["origin"][1], -frame["floor_y"]]
+    return M
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ Description=Roomprint GPU worker (video -> space.json; waits for free VRAM)
 
 [Service]
 WorkingDirectory=%h/Work/roomprint/worker
+# BRUSH: the splat trainer's binary (worker/splat.py); machine-specific, in the env file
 EnvironmentFile=%h/.config/roomprint/env
 Environment=PYTHONUNBUFFERED=1
 ExecStart=%h/Work/roomprint/worker/.venv/bin/python run.py watch

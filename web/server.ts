@@ -18,12 +18,15 @@
 //          DELETE /api/s/<token>/clips/<clip>
 //          GET    /api/s/<token>/clips/<clip>/file   the uploaded file (Range requests, for video)
 //          POST   /api/s/<token>/submit              -> status queued
-//          GET    /api/s/<token>/status | space.json | preview.ply | mesh.ply
+//          GET    /api/s/<token>/status | space.json | preview.ply | mesh.ply | textured.glb | splat.splat
+//          GET    /api/s/<token>/export/<kind>.<format>[?crop=x0,y0,z0,x1,y1,z1]   see web/exports.ts
+//          POST   /api/s/<token>/splat               ask for a Gaussian splat (owner key if the space has one)
 import { join, extname } from "path";
-import { existsSync, mkdirSync, statSync, renameSync, unlinkSync } from "fs";
+import { existsSync, mkdirSync, statSync, renameSync, unlinkSync, rmSync, writeFileSync } from "fs";
 import { open } from "fs/promises";
 import { randomBytes, timingSafeEqual } from "crypto";
 import { mailConfigured, sendMail } from "./mail";
+import { exportsOf, exportFile } from "./exports";
 import {
   DATA_DIR, spaceDir, byToken, createSpace, deleteSpace, setOwner, hashKey, listSpaces, getStatus, setStatus, listClips, listPending,
   readJson, writeJson, now, type Meta, type Pending, type Clip,
@@ -39,8 +42,10 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";  // the overview page's secre
 const CHUNK_MAX = 16 * 1024 * 1024;           // client sends 8 MB; allow some slack
 const FILE_MAX = 8 * 1024 * 1024 * 1024;      // 8 GB per clip
 const VIDEO_EXT = ["mov", "mp4", "m4v", "webm", "3gp", "mkv"];
-// .roomplan: the iOS app's scan; .rgbd: its LiDAR depth frames (worker/fuse.py)
-const LIDAR_EXT = ["usdz", "obj", "glb", "gltf", "ply", "zip", "roomplan", "rgbd"];
+// From the iOS app: .roomplan a room scan, .freescan a scan without rooms, .rgbd the LiDAR
+// depth frames (worker/fuse.py), .poses the camera pose of every video frame (worker/views.py)
+const SCAN_EXT = ["roomplan", "freescan"];
+const LIDAR_EXT = ["usdz", "obj", "glb", "gltf", "ply", "zip", "rgbd", "poses", ...SCAN_EXT];
 const EXTS = new Set([...VIDEO_EXT, ...LIDAR_EXT]);
 const LOCKED = new Set(["queued", "processing"]);   // no upload changes while the worker owns it
 
@@ -82,6 +87,12 @@ function summary(meta: Meta) {
     has_space: existsSync(join(dir, "space.json")),
     has_preview: existsSync(join(dir, "preview.ply")),
     has_mesh: existsSync(join(dir, "mesh.ply")),
+    has_textured: existsSync(join(dir, "textured.glb")),
+    // none | asked (the worker trains it when the GPU is free) | ready | failed
+    splat: existsSync(join(dir, "splat.splat")) ? "ready" : existsSync(join(dir, "splat.failed")) ? "failed"
+      : existsSync(join(dir, "splat.request")) ? "asked" : "none",
+    owned: !!meta.owner_hash,
+    exports: exportsOf(meta.id),
   };
 }
 
@@ -179,7 +190,7 @@ async function putChunk(meta: Meta, clip: string, req: Request, url: URL): Promi
     writeJson(join(dir, `${p.id}.json`), c);
     unlinkSync(pendingPath(meta.id, p.id));
     // A finished scan starts processing by itself: the app may be closed by now.
-    if (p.ext === "roomplan" && !LOCKED.has(getStatus(meta.id).state)) {
+    if (SCAN_EXT.includes(p.ext) && !LOCKED.has(getStatus(meta.id).state)) {
       setStatus(meta.id, { state: "queued", step: "converting the scan", progress: 0, error: null });
     }
     return json({ received: p.bytes, complete: true });
@@ -200,9 +211,18 @@ function deleteClip(meta: Meta, clip: string): Response {
   const ext = extname(c.filename).slice(1).toLowerCase();
   try { unlinkSync(join(dir, `${clip}.${ext}`)); } catch {}
   unlinkSync(join(dir, `${clip}.json`));
-  // The real-scan model is made from the depth file (and holds its colours): it goes too.
-  if (ext === "rgbd") for (const f of ["mesh.ply", "mesh.failed"]) try { unlinkSync(join(spaceDir(meta.id), f)); } catch {}
+  dropDerived(meta.id, ext);
   return json({ ok: true });
+}
+
+// What was made from a deleted upload holds its content (the scan's colours, the photos),
+// so it goes with it: the fused mesh with the depth file, and the textured model, the
+// splat and every cached export with any of the files they were made from.
+function dropDerived(id: string, ext: string) {
+  const gone = ext === "rgbd" ? ["mesh.ply", "mesh.failed"] : [];
+  if (["rgbd", "poses", ...VIDEO_EXT].includes(ext)) gone.push("textured.glb", "textured.failed", "splat.ply", "splat.splat", "splat.failed", "splat.request");
+  for (const f of gone) try { unlinkSync(join(spaceDir(id), f)); } catch {}
+  rmSync(join(spaceDir(id), "exports"), { recursive: true, force: true });
 }
 
 const FILE_TYPES: Record<string, string> = {
@@ -210,6 +230,7 @@ const FILE_TYPES: Record<string, string> = {
   mov: "video/mp4", mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", "3gp": "video/3gpp", mkv: "video/x-matroska",
   usdz: "model/vnd.usdz+zip", glb: "model/gltf-binary", gltf: "model/gltf+json", obj: "text/plain",
   ply: "application/octet-stream", zip: "application/zip", roomplan: "application/json", rgbd: "application/octet-stream",
+  freescan: "application/json", poses: "application/octet-stream",
 };
 
 function clipFile(meta: Meta, clip: string, req: Request): Response {
@@ -290,6 +311,17 @@ function claim(meta: Meta, req: Request): Response {
   if (!appAllowed(req)) return err("not allowed", 403);
   if (meta.owner_hash) return err("this space already has an owner", 409);
   return json({ owner: setOwner(meta) });
+}
+
+// A splat trains on the GPU for several minutes, so it is only made when asked for: by the
+// owner of a space that has one, by anyone with the link otherwise.
+function askSplat(meta: Meta, req: Request): Response {
+  if (meta.owner_hash && !isOwner(meta, req)) return err("only the phone that made this space can ask for a splat", 403);
+  const dir = spaceDir(meta.id);
+  if (!existsSync(join(dir, "mesh.ply"))) return err("this space has no real scan to make a splat from", 409);
+  try { unlinkSync(join(dir, "splat.failed")); } catch {}
+  writeFileSync(join(dir, "splat.request"), now());
+  return json(summary(meta));
 }
 
 function deleteWhole(meta: Meta, req: Request): Response {
@@ -417,6 +449,11 @@ async function handle(req: Request): Promise<Response> {
   if (sub === "/space.json" && m === "GET") return spaceFile(meta, "space.json", "application/json");
   if (sub === "/preview.ply" && m === "GET") return spaceFile(meta, "preview.ply", "application/octet-stream");
   if (sub === "/mesh.ply" && m === "GET") return spaceFile(meta, "mesh.ply", "application/octet-stream");
+  if (sub === "/textured.glb" && m === "GET") return spaceFile(meta, "textured.glb", "model/gltf-binary");
+  if (sub === "/splat.splat" && m === "GET") return spaceFile(meta, "splat.splat", "application/octet-stream");
+  if (sub === "/splat" && m === "POST") return askSplat(meta, req);
+  const ex = sub.match(/^\/export\/([a-z]+)\.([a-z0-9]+)$/);
+  if (ex && m === "GET") return exportFile(meta, ex[1], ex[2], url);
   if (sub === "/clips" && m === "POST") return createClip(meta, req);
 
   const f = sub.match(/^\/clips\/([\w-]+)\/file$/);
@@ -442,7 +479,8 @@ async function safe(req: Request): Promise<Response> {
 }
 
 // maxRequestBodySize covers one chunk; whole videos never arrive in one request.
-const opts = { port: PORT, idleTimeout: 120, maxRequestBodySize: CHUNK_MAX + 1024 * 1024, fetch: safe };
+// idleTimeout: an export is built while its request waits
+const opts = { port: PORT, idleTimeout: 255, maxRequestBodySize: CHUNK_MAX + 1024 * 1024, fetch: safe };
 Bun.serve({ hostname: LOCAL_HOST, ...opts });
 console.log(`roomprint on http://${LOCAL_HOST}:${PORT} (data ${DATA_DIR})`);
 if (TUNNEL_HOST) {

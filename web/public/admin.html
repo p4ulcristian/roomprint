@@ -14,32 +14,32 @@
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
   .day { margin: 26px 0 10px; font-size: .95rem; color: var(--muted, #6b7280); font-weight: 600; }
   .space { display: flex; flex-direction: column; gap: 8px; margin: 0; color: inherit; text-decoration: none; }
-  .space:hover { border-color: #9aa7b4; }
-  .thumb { aspect-ratio: 4 / 3; background: #fbfdff; border-radius: 10px; display: flex; align-items: center;
+  .space:hover { border-color: var(--accent); }
+  .thumb { aspect-ratio: 4 / 3; background: var(--paper); border-radius: 14px; display: flex; align-items: center;
            justify-content: center; overflow: hidden; border: 1px solid var(--line); }
   .thumb svg { width: 100%; height: 100%; }
   .thumb .muted { font-size: .85rem; }
   .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
   .row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tags { display: flex; gap: 6px; flex-wrap: wrap; }
-  .tag { font-size: .75rem; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: #e9edf2; }
+  .tag { font-size: .75rem; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: var(--fill); }
   .tag.state-failed { background: #fde2e2; color: #9b1c1c; }
   .tag.state-processing, .tag.state-queued { background: #fff1d6; color: #8a5a00; }
   .rooms { font-size: .85rem; color: var(--muted, #6b7280); }
   .space { position: relative; }
   .remove { position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; border-radius: 50%; padding: 0;
-            border: 1px solid var(--line); background: rgba(255,255,255,.92); color: var(--bad, #b42318);
+            border: 1px solid var(--line); background: var(--glass-strong); color: var(--bad, #b42318);
             font-size: 18px; line-height: 1; cursor: pointer; opacity: .75; }
   .remove:hover { opacity: 1; background: #fde2e2; }
-  dialog { border: 0; border-radius: 16px; padding: 22px; max-width: 380px; width: calc(100% - 32px);
+  dialog { border-radius: 26px; color: var(--ink); padding: 22px; max-width: 380px; width: calc(100% - 32px);
            box-shadow: 0 20px 50px rgba(0,0,0,.25); }
   dialog::backdrop { background: rgba(15,23,42,.45); }
   dialog h2 { margin: 0 0 8px; font-size: 1.2rem; }
   dialog p { margin: 0 0 16px; color: var(--muted, #6b7280); }
   dialog .actions { display: flex; gap: 10px; justify-content: flex-end; }
-  dialog button { font: inherit; font-weight: 600; padding: 10px 16px; border-radius: 10px; cursor: pointer;
-                  border: 1px solid var(--line); background: #fff; color: var(--ink); }
-  dialog button.danger { background: var(--bad, #b42318); border-color: transparent; color: #fff; }
+  dialog button { font: inherit; font-weight: 600; padding: 10px 16px; border-radius: 999px; cursor: pointer;
+                  border: 0; background: var(--fill); color: var(--ink); box-shadow: none; }
+  dialog button.danger { background: var(--bad, #b42318); color: #fff; }
   dialog button:disabled { opacity: .6; cursor: default; }
   #removeErr { color: var(--bad, #b42318); margin: -6px 0 12px; }
   .wide-wrap { max-width: 1200px; margin: 0 auto; padding: 18px 16px 48px; }
@@ -81,18 +81,20 @@
   function card(s) {
     const created = new Date(s.created);
     const scans = s.clips.filter(c => /\.roomplan$/i.test(c.filename)).length;
+    const free = s.rooms && !s.rooms.length;   // a free scan: a 3D model, no floor plan
     const videos = s.clips.filter(c => VIDEO.test(c.filename)).length;
     const tags = [];
     if (s.status.state !== "done") tags.push(`<span class="tag state-${s.status.state}">${esc(s.status.state)}</span>`);
     if (scans) tags.push(`<span class="tag">LiDAR scan</span>`);
+    if (free) tags.push(`<span class="tag">Free scan</span>`);
     if (videos) tags.push(`<span class="tag">${videos > 1 ? videos + " videos" : "Video"}</span>`);
     if (s.pending) tags.push(`<span class="tag state-queued">${s.pending} upload${s.pending > 1 ? "s" : ""} unfinished</span>`);
-    const rooms = s.rooms
+    const rooms = s.rooms?.length
       ? s.rooms.map(r => `${esc(r.name)} ${r.area} m²`).join(" · ")
       : esc(s.status.step);
-    return `<a class="card space" href="/s/${s.token}" data-token="${s.token}" data-id="${s.id}" data-has="${s.rooms ? 1 : 0}">
+    return `<a class="card space" href="/s/${s.token}" data-token="${s.token}" data-id="${s.id}" data-has="${s.rooms?.length ? 1 : 0}">
       ${prints ? `<button class="remove" type="button" title="Delete" aria-label="Delete">×</button>` : ""}
-      <div class="thumb"><span class="muted">${s.rooms ? "" : "No plan yet"}</span></div>
+      <div class="thumb"><span class="muted">${free ? "Free scan" : s.rooms ? "" : "No plan yet"}</span></div>
       <div class="row"><strong>${esc(s.name)}</strong><span class="muted small">${created.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span></div>
       <div class="rooms">${rooms}</div>
       <div class="tags">${tags.join("")}</div>

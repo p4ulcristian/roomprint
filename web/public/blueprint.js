@@ -160,13 +160,3 @@ export function renderBlueprint(space, { furniture = true } = {}) {
   out.push(`</svg>`);
   return out.join("\n");
 }
-
-export function downloadSvg(svgText, name) {
-  const blob = new Blob([`<?xml version="1.0" encoding="UTF-8"?>\n`, svgText], { type: "image/svg+xml" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `${(name || "floor-plan").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") || "floor-plan"}.svg`;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-}

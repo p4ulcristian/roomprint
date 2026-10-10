@@ -16,16 +16,18 @@
 <main class="wrap">
   <a class="brand" href="/" style="text-decoration:none;color:inherit"><img src="/static/icon-64.png" alt="">Roomprint</a>
   <h1>Privacy</h1>
-  <p class="muted">Last updated 9 October 2026</p>
+  <p class="muted">Last updated 10 October 2026</p>
 
   <p>Roomprint turns a scan of your rooms into a floor plan, a 3D model and a walkthrough video.
   It is a small test project run by one person, not a company.</p>
 
   <h2>What gets uploaded</h2>
   <ul>
-    <li>The room scan: wall, door, window and furniture positions measured by the iPhone.</li>
+    <li>The scan: wall, door, window and furniture positions measured by the iPhone (a free scan has none of these).</li>
     <li>A video of the walk, <strong>with sound</strong> from the microphone.</li>
     <li>The depth measurements and small camera photos taken during the scan, used to build the coloured 3D model.</li>
+    <li>Where the camera was and which way it pointed for each frame of the video, inside the scanned space
+    (not a location on a map), used to paint the 3D model from the video.</li>
     <li>The space and room names you type.</li>
   </ul>
   <p>Nothing else: no account, no name, no location, no contacts, no analytics, no ads, no tracking.
@@ -33,16 +35,18 @@
 
   <h2>Where it is kept</h2>
   <p>On a private server run by the developer in the European Union, until you delete it. It is not sold
-  or shared with anyone and not used to train AI models. Floor plans and 3D models are made on that server.
-  There are no backup copies.</p>
+  or shared with anyone and not used to train AI models. Floor plans, 3D models, the photo-like "splat" view
+  you can ask for, and the files you export are all made on that server, from your scan alone, and are
+  deleted with it. There are no backup copies.</p>
 
   <h2>Who can see it</h2>
   <p>Every space has its own link that cannot be guessed. <strong>Anyone who has the link can see the
-  space</strong>, including the video, and download its files, so only share it with people you trust.
+  space</strong>, including the video, and download its files and exports, so only share it with people you trust.
   The developer can see all spaces, to keep the service working.</p>
 
   <h2>Deleting your data</h2>
-  <p>In the app, open a space: swipe a file to delete it, or tap <em>Delete this space from the server</em>.
+  <p>In the app, open a space and its menu: under <em>Files on the server</em> swipe a file to delete it, or
+  tap <em>Delete this space</em>.
   You can also swipe a space on the start screen. Deleting removes the files from the server
   <strong>right away and for good</strong>: there is no trash and no backup, and the link stops working for
   everyone. Uploads still waiting on the phone are cancelled.</p>

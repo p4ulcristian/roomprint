@@ -2,9 +2,10 @@ import ARKit
 import AVFoundation
 import QuartzCore
 
-/// Records what the camera sees during a RoomPlan scan, plus the microphone, into one
-/// .mov. Frames are polled from the AR session's currentFrame, so RoomPlan keeps the
-/// session (and its delegate) to itself. Video and sound are written separately and
+/// Records what the camera sees during a scan, plus the microphone, into one .mov, and
+/// beside it the LiDAR depth (DepthLog) and the camera's pose per video frame (PoseLog).
+/// Frames are polled from the AR session's currentFrame, so RoomPlan or the AR view
+/// keeps the session (and its delegate) to itself. Video and sound are written separately and
 /// joined at the end; both start together, so they stay in sync.
 @MainActor
 final class WalkRecorder: NSObject {
@@ -25,6 +26,10 @@ final class WalkRecorder: NSObject {
     var outputURL: URL { dir.appendingPathComponent("walk-\(stamp).mov") }
     /// The LiDAR depth of the same walk (a few frames a second), for the real 3D model.
     private(set) lazy var depth = DepthLog(url: dir.appendingPathComponent("walk-\(stamp).rgbd"))
+    /// The camera's pose for every frame of the video; named like the video, so the worker pairs them.
+    private(set) lazy var poses = PoseLog(url: dir.appendingPathComponent("walk-\(stamp).poses"))
+    /// When filming began (nil before the first frame).
+    private(set) var started: Date?
 
     init(session: ARSession) {
         self.session = session
@@ -54,9 +59,11 @@ final class WalkRecorder: NSObject {
         if writer == nil {
             guard setUpWriter(width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb)) else { return }
             first = frame.timestamp
+            started = Date()
         }
         guard let input, input.isReadyForMoreMediaData, let first else { return }
-        adaptor?.append(pb, withPresentationTime: CMTime(seconds: frame.timestamp - first, preferredTimescale: 600))
+        let time = CMTime(seconds: frame.timestamp - first, preferredTimescale: 600)
+        if adaptor?.append(pb, withPresentationTime: time) == true { poses.add(frame, time: time.seconds) }
     }
 
     private func setUpWriter(width: Int, height: Int) -> Bool {
@@ -90,6 +97,12 @@ final class WalkRecorder: NSObject {
     func finishDepth() async -> URL? {
         _ = await finish()
         return await depth.finish()
+    }
+
+    /// The pose track, once finish() has stopped the recording (nil if nothing was filmed).
+    func finishPoses() async -> URL? {
+        _ = await finish()
+        return await poses.finish()
     }
 
     private func stopAndSave() async -> URL? {

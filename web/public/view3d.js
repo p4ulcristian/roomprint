@@ -4,14 +4,20 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
 import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
   bounds, wallFrame, along, wallOpenings, outwardSide, polygonCentroid, polygonArea,
   ROOM_COLORS, FURN_COLORS, hashColor,
 } from "./geom.js";
 
-export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) {
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+// urls: points (the video's cloud), mesh (fused scan, vertex colours), textured (the same
+// with a photo texture, y-up .glb), splat (.splat). Each is optional.
+export function create3D(container, space, { onRoom, onMeasure, urls = {} } = {}) {
+  // The page's own backdrop shows through, so the view follows light and dark mode.
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setClearColor(0x000000, 0);
+  renderer.localClippingEnabled = true;   // the crop box
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.appendChild(renderer.domElement);
@@ -25,9 +31,10 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
   container.appendChild(tip);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color("#eef1f4");
 
-  const b = bounds(space);
+  // A free scan has no rooms to measure the view by; the worker notes the scan's extent.
+  const b = space.rooms.length || !space.bounds ? bounds(space)
+    : { minX: space.bounds[0][0], minY: space.bounds[0][1], maxX: space.bounds[1][0], maxY: space.bounds[1][1] };
   const center = new THREE.Vector3((b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2, 0);
   const span = Math.max(b.maxX - b.minX, b.maxY - b.minY, 2);
 
@@ -60,15 +67,13 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
   sun.shadow.bias = -0.0005;
   scene.add(sun, sun.target);
 
-  // Ground
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(span * 8, span * 8),
-    new THREE.MeshStandardMaterial({ color: "#e4e7ea", roughness: 1 }),
-  );
+  // Ground: nothing but the model's shadow on the page's backdrop
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(span * 8, span * 8), new THREE.ShadowMaterial({ opacity: 0.16 }));
   ground.position.set(center.x, center.y, -0.02);
   ground.receiveShadow = true;
   scene.add(ground);
-  const fixed = new Set(scene.children);   // lights and ground stay when the real scan shows
+  const drawn = new THREE.Group();   // the drawn model: floors, walls, furniture, labels
+  scene.add(drawn);
 
   // Floors (one per room) + labels
   const floors = [];
@@ -81,7 +86,7 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
     mesh.position.z = 0.002;
     mesh.receiveShadow = true;
     mesh.userData.room = r;
-    scene.add(mesh);
+    drawn.add(mesh);
     floors.push(mesh);
 
     const el = document.createElement("div");
@@ -90,7 +95,7 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
     const label = new CSS2DObject(el);
     const [cx, cy] = polygonCentroid(r.polygon);
     label.position.set(cx, cy, 0.05);
-    scene.add(label);
+    drawn.add(label);
   });
 
   // Walls: boxes around each opening (below the sill, above the lintel, and solid stretches).
@@ -98,6 +103,7 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
   const edgeMat = new THREE.LineBasicMaterial({ color: "#8a8f96", transparent: true, opacity: 0.35 });
   const glassMat = new THREE.MeshStandardMaterial({ color: "#9cc8ee", transparent: true, opacity: 0.35, roughness: 0.1, depthWrite: false });
   const fadeable = [];   // exterior walls: { group, mat, normal, mid }
+  const wallMeshes = [];
 
   for (const w of space.walls) {
     const f = wallFrame(w);
@@ -120,6 +126,7 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
       m.add(edges);
       group.add(m);
       meshes.push(m);
+      wallMeshes.push(m);
     };
 
     const ops = wallOpenings(space, w);
@@ -139,7 +146,7 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
       u = Math.max(u, o.u1);
     }
     if (f.L + h > u) piece(u, f.L + h, 0, H);
-    scene.add(group);
+    drawn.add(group);
 
     if (outSide !== null) {
       const mid = along(w, f, f.L / 2);
@@ -163,7 +170,7 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
     mesh.rotation.z = o.yaw;
     mesh.castShadow = mesh.receiveShadow = true;
     mesh.userData.object = o;
-    scene.add(mesh);
+    drawn.add(mesh);
     furniture.push(mesh);
   }
 
@@ -171,6 +178,7 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
   let cutaway = true;
   const tmp = new THREE.Vector3();
   function updateFade() {
+    if (mode !== "model") return;
     for (const w of fadeable) {
       const facing = cutaway && tmp.copy(camera.position).sub(w.mid).dot(w.normal) > 0;
       const want = facing ? 0.07 : 1;
@@ -229,7 +237,7 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
 
   let hovered = null;
   function onMove(ev) {
-    if (ev.pointerType === "touch") return;
+    if (ev.pointerType === "touch" || mode !== "model" || measuring) return;
     const hit = pick(ev, furniture);
     const obj = hit?.object ?? null;
     if (hovered !== obj) {
@@ -252,6 +260,8 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
   const onUp = ev => {
     if (!down || Math.hypot(ev.clientX - down.x, ev.clientY - down.y) > 6) { down = null; return; }
     down = null;
+    if (measuring) { measureTap(ev); return; }
+    if (mode !== "model") return;
     const fHit = pick(ev, furniture);
     if (fHit && ev.pointerType === "touch") {
       // Touch has no hover: show the label briefly on tap.
@@ -272,7 +282,7 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
   let points = null, pointsLoading = null;
   async function setPoints(on) {
     if (on && !points) {
-      pointsLoading ??= new PLYLoader().loadAsync(pointsUrl).then(geo => {
+      pointsLoading ??= new PLYLoader().loadAsync(urls.points).then(geo => {
         const hasColor = !!geo.getAttribute("color");
         points = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.015, vertexColors: hasColor, color: hasColor ? "#ffffff" : "#3d6fa8" }));
         scene.add(points);
@@ -283,23 +293,152 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
     if (points) points.visible = on;
   }
 
-  // ---------- real scan: the mesh fused from the LiDAR depth (worker/fuse.py) ----------
-  // Shown instead of the drawn model; unlit, so the colours are the camera's own. Only the
-  // side facing into the rooms is drawn, so from outside the near walls and the ceiling
-  // vanish like a dollhouse.
-  let real = null, realLoading = null;
-  async function setMesh(on) {
-    if (on && !real) {
-      realLoading ??= new PLYLoader().loadAsync(meshUrl).then(geo => {
-        real = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: !!geo.getAttribute("color"), side: THREE.FrontSide }));
-        scene.add(real);
-        fixed.add(real);
-        return real;
-      }).finally(() => { realLoading = null; });
-      await realLoading;
+  // ---------- what is shown: the drawn model, the real scan, or the splat ----------
+  // The real scan is the mesh fused from the LiDAR depth, painted from the photos when the
+  // worker has done that (worker/texture.py). It is unlit, so the colours are the camera's
+  // own, and only the side facing into the rooms is drawn: from outside the near walls
+  // and the ceiling vanish like a dollhouse.
+  let mode = "model";
+  let real = null, realLoading = null, splat = null, splatLoading = null;
+  const realMeshes = [];
+  const clip = [];   // the crop box as six planes, shared by the real scan's materials
+
+  function loadReal() {
+    realLoading ??= (async () => {
+      const group = new THREE.Group();
+      if (urls.textured) {
+        const gltf = await new GLTFLoader().loadAsync(urls.textured);
+        gltf.scene.traverse(o => {
+          if (!o.isMesh) return;
+          o.material = new THREE.MeshBasicMaterial({ map: o.material.map, side: THREE.FrontSide, clippingPlanes: clip });
+          realMeshes.push(o);
+        });
+        gltf.scene.rotation.x = Math.PI / 2;   // glTF is y-up, the plan z-up
+        group.add(gltf.scene);
+      } else {
+        const geo = await new PLYLoader().loadAsync(urls.mesh);
+        const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: !!geo.getAttribute("color"), side: THREE.FrontSide, clippingPlanes: clip }));
+        realMeshes.push(m);
+        group.add(m);
+      }
+      scene.add(group);
+      group.updateMatrixWorld(true);
+      real = group;
+      return group;
+    })().catch(e => { realLoading = null; throw e; });
+    return realLoading;
+  }
+
+  function loadSplat() {
+    splatLoading ??= (async () => {
+      const GS = await import("@mkkellogg/gaussian-splats-3d");
+      const v = new GS.DropInViewer({ sharedMemoryForWorkers: false, gpuAcceleratedSort: false });
+      await v.addSplatScene(urls.splat, { format: GS.SceneFormat.Splat, showLoadingUI: false, splatAlphaRemovalThreshold: 8 });
+      scene.add(v);
+      splat = v;
+      return v;
+    })().catch(e => { splatLoading = null; throw e; });
+    return splatLoading;
+  }
+
+  async function setMode(next) {
+    if (next === "scan") await loadReal();
+    if (next === "splat") await loadSplat();
+    // A splat has no back faces to hide, so from outside its own walls and ceiling are in
+    // the way: the camera goes inside, at eye height in the biggest room, and may look up.
+    const inside = next === "splat";
+    if (inside !== (mode === "splat")) {
+      controls.maxPolarAngle = inside ? Math.PI : Math.PI * 0.49;
+      controls.minDistance = inside ? 0.05 : 1;
+      if (inside) {
+        const big = [...space.rooms].sort((a, b) => Math.abs(polygonArea(b.polygon)) - Math.abs(polygonArea(a.polygon)))[0];
+        const [x, y] = big ? polygonCentroid(big.polygon) : [center.x, center.y];
+        const eye = new THREE.Vector3(x, y, 1.4);
+        flyTo(eye, eye.clone().add(new THREE.Vector3(0.35, -0.6, 0.12)));
+      } else {
+        const h = home();
+        flyTo(h.target, h.pos);
+      }
+      userMoved = inside;
     }
-    if (real) real.visible = on;
-    for (const o of scene.children) if (!fixed.has(o) && o !== points) o.visible = !on;
+    mode = next;
+    drawn.visible = ground.visible = mode === "model";
+    if (real) real.visible = mode === "scan";
+    if (splat) splat.visible = mode === "splat";
+    tip.classList.add("hidden");
+    if (mode !== "model" && selected) focusRoom(null);
+    cropBox.visible = mode === "scan" && !!cropping;
+  }
+
+  /** The real scan's extent, [[x0, y0, z0], [x1, y1, z1]], once it has loaded. */
+  function scanBounds() {
+    if (!real) return null;
+    const box = new THREE.Box3().setFromObject(real);
+    return [box.min.toArray(), box.max.toArray()];
+  }
+
+  // ---------- crop: a box on the real scan; exports keep what is inside ----------
+  const cropBox = new THREE.Box3Helper(new THREE.Box3(), "#2f6db5");
+  cropBox.visible = false;
+  scene.add(cropBox);
+  let cropping = null;
+  function setCrop(box) {
+    cropping = box;
+    clip.length = 0;
+    if (box) {
+      const [x0, y0, z0, x1, y1, z1] = box;
+      clip.push(
+        new THREE.Plane(new THREE.Vector3(1, 0, 0), -x0), new THREE.Plane(new THREE.Vector3(-1, 0, 0), x1),
+        new THREE.Plane(new THREE.Vector3(0, 1, 0), -y0), new THREE.Plane(new THREE.Vector3(0, -1, 0), y1),
+        new THREE.Plane(new THREE.Vector3(0, 0, 1), -z0), new THREE.Plane(new THREE.Vector3(0, 0, -1), z1));
+      cropBox.box.set(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1));
+    }
+    cropBox.visible = mode === "scan" && !!box;
+  }
+
+  // ---------- measure: tap two points, get the distance between them ----------
+  let measuring = false, pending = null;
+  const measures = new THREE.Group();
+  scene.add(measures);
+  const dotGeo = new THREE.SphereGeometry(0.018, 12, 8);
+  const dotMat = new THREE.MeshBasicMaterial({ color: "#2f6db5", depthTest: false });
+  const lineMat = new THREE.LineBasicMaterial({ color: "#2f6db5", depthTest: false });
+  const dot = p => {
+    const m = new THREE.Mesh(dotGeo, dotMat);
+    m.position.copy(p);
+    m.renderOrder = 10;
+    measures.add(m);
+    return m;
+  };
+  function measureTap(ev) {
+    const hit = pick(ev, mode === "scan" ? realMeshes : [...wallMeshes, ...furniture, ...floors]);
+    if (!hit) return;
+    // behind the crop box's faces the scan is not drawn, so it cannot be measured either
+    if (mode === "scan" && clip.some(pl => pl.distanceToPoint(hit.point) < 0)) return;
+    if (!pending) { pending = dot(hit.point); onMeasure?.(count(), true); return; }
+    const a = pending.position, bPt = hit.point.clone();
+    dot(bPt);
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, bPt]), lineMat);
+    line.renderOrder = 10;
+    const el = document.createElement("div");
+    el.className = "measure";
+    el.textContent = `${a.distanceTo(bPt).toFixed(2)} m`;
+    const label = new CSS2DObject(el);
+    label.position.copy(a).add(bPt).multiplyScalar(0.5);
+    measures.add(line, label);
+    pending = null;
+    onMeasure?.(count(), false);
+  }
+  const count = () => measures.children.filter(o => o.isLine).length;
+  function setMeasure(on) {
+    measuring = on;
+    if (!on && pending) { measures.remove(pending); pending = null; }
+    renderer.domElement.style.cursor = on ? "crosshair" : "";
+  }
+  function clearMeasures() {
+    for (const o of [...measures.children]) { measures.remove(o); o.element?.remove(); o.geometry?.dispose?.(); }
+    pending = null;
+    onMeasure?.(0, false);
   }
 
   // ---------- loop ----------
@@ -328,8 +467,12 @@ export function create3D(container, space, { onRoom, pointsUrl, meshUrl } = {}) 
     setActive(on) { renderer.setAnimationLoop(on ? frame : null); if (on) resize(); },
     setCutaway(on) { cutaway = on; },
     setPoints,
-    setMesh,
-    reset() { focusRoom(null); },
+    setMode,
+    scanBounds,
+    setCrop,
+    setMeasure,
+    clearMeasures,
+    reset() { userMoved = false; focusRoom(null); },
     dispose() { renderer.setAnimationLoop(null); ro.disconnect(); controls.dispose(); renderer.dispose(); container.innerHTML = ""; },
   };
 }

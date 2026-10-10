@@ -75,3 +75,7 @@ Units are metres. Floor plane is x/y, z is up. Floor is at z = 0.
 - `lidar_frame` (LiDAR scans only): how ARKit world coordinates map onto the plan,
   `plan xy = rotate([x, -z], theta) - origin`, `height = y - floor_y`. The worker uses it
   to place `mesh.ply`, the coloured model fused from the scan's depth (`worker/fuse.py`).
+- `kind: "free"` (free scans only): there are no rooms or walls, only the real scan.
+  `bounds`, `[[x0, y0, z0], [x1, y1, z1]]`, is the scan's extent; the viewer frames its
+  camera by it. The worker chooses `lidar_frame` itself: the origin under the middle of
+  the scan, at its lowest surface.

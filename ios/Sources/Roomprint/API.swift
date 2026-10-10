@@ -15,12 +15,19 @@ struct SavedSpace: Codable, Identifiable, Hashable {
 
 struct Summary: Decodable {
     struct Meta: Decodable { let id: String; let name: String }
-    struct Status: Decodable { let state: String; let step: String; let progress: Double; let error: String? }
+    struct Status: Decodable { let state: String; let step: String; let progress: Double; let error: String?; let updated: String? }
     struct Clip: Decodable { let id: String; let filename: String; let bytes: Int }
     let meta: Meta
     let status: Status
     let clips: [Clip]
     let has_space: Bool
+    let has_mesh: Bool?
+    let has_textured: Bool?
+    let splat: String?
+
+    var busy: Bool { ["queued", "processing"].contains(status.state) }
+    /// Changes whenever the viewer has something new to show.
+    var shown: String { "\(has_space) \(has_mesh ?? false) \(has_textured ?? false) \(splat ?? "")" }
 }
 
 struct APIError: LocalizedError {

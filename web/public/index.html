@@ -11,17 +11,16 @@
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <style>
   .hero { text-align: center; margin: 28px 0 18px; }
-  .hero img { width: 128px; height: 128px; border-radius: 28px; box-shadow: 0 8px 24px rgba(30,58,95,.25); }
+  .hero img { width: 128px; height: 128px; border-radius: 28px; box-shadow: 0 14px 34px -8px var(--glass-shade); }
   .hero h1 { font-size: 2.2rem; margin: 16px 0 4px; }
   .hero p { margin: 0; color: var(--muted); font-size: 1.05rem; }
   .center { text-align: center; }
   ol.steps { list-style: none; padding: 0; margin: 0; }
   ol.steps li { display: flex; gap: 14px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
   ol.steps li:last-child { border-bottom: 0; }
-  ol.steps span { flex: none; width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: #fff;
+  ol.steps span { flex: none; width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: var(--accent-ink);
                   display: flex; align-items: center; justify-content: center; font-weight: 700; }
-  form input, form textarea { display: block; width: 100%; font: inherit; padding: 11px 12px; margin: 0 0 10px;
-                              border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
+  form input, form textarea { display: block; margin: 0 0 10px; }
   form textarea { min-height: 90px; resize: vertical; }
   form .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
   #sent { color: var(--ok); font-weight: 600; margin-top: 10px; }
@@ -33,7 +32,7 @@
   <div class="hero">
     <img src="/static/icon-128.png" alt="">
     <h1>Roomprint</h1>
-    <p>Scan your rooms. Get a floor plan.</p>
+    <p>Scan your rooms. Get a floor plan and a 3D model.</p>
   </div>
 
   <section class="card">

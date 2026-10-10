@@ -56,6 +56,11 @@ final class ScanController: NSObject, ObservableObject, @preconcurrency RoomCapt
         await recorder.finishDepth()
     }
 
+    /// The camera pose of every video frame, for the model's photo texture.
+    func finishPoses() async -> URL? {
+        await recorder.finishPoses()
+    }
+
     func build() async throws -> CapturedStructure {
         captureView.captureSession.stop()
         let builder = StructureBuilder(options: [.beautifyObjects])
@@ -102,21 +107,19 @@ struct ScanView: View {
                     ProgressView { Text(uploadStep) }
                 } else if let error {
                     Text(error).foregroundStyle(.red)
-                    Button("Close") { dismiss() }
+                    Button("Close") { dismiss() }.glassButton()
                 } else {
                     controls
                 }
             }
-            .padding()
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .padding(18)
+            .frame(maxWidth: .infinity)
+            .glass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
             .padding()
         }
         .overlay(alignment: .topLeading) {
             if uploadStep == nil {
-                Button { ctl.stopAll(); dismiss() } label: {
-                    Image(systemName: "xmark").padding(12).background(.ultraThinMaterial, in: Circle())
-                }
-                .padding()
+                CloseButton { ctl.stopAll(); dismiss() }.padding()
             }
         }
         .onAppear { ctl.startRoom() }
@@ -135,7 +138,7 @@ struct ScanView: View {
                  : "Room \(ctl.rooms.count + 1): go on into the next room.")
                 .font(.callout).multilineTextAlignment(.center)
             Button("Done with this room") { ctl.finishRoom() }
-                .buttonStyle(.borderedProminent)
+                .glassButton(prominent: true)
         case .processing:
             ProgressView("Processing the room…")
         case .reviewing:
@@ -146,17 +149,17 @@ struct ScanView: View {
                     ctl.nameLastRoom(roomName); roomName = ""
                     ctl.startRoom()
                 }
-                .buttonStyle(.bordered)
+                .glassButton()
                 Button("Finish & upload") {
                     ctl.nameLastRoom(roomName)
                     Task { await upload() }
                 }
-                .buttonStyle(.borderedProminent)
+                .glassButton(prominent: true)
             }
             Text("\(ctl.rooms.count) room\(ctl.rooms.count == 1 ? "" : "s") scanned").font(.caption)
         case .failed(let msg):
             Text("The scan failed: \(msg)").foregroundStyle(.red)
-            Button("Try this room again") { ctl.startRoom() }
+            Button("Try this room again") { ctl.startRoom() }.glassButton()
         }
     }
 
@@ -169,6 +172,7 @@ struct ScanView: View {
             uploadStep = "Saving the video…"
             let video = await ctl.finishVideo()
             let depth = await ctl.finishDepth()
+            let poses = await ctl.finishPoses()
             uploadStep = "Joining the rooms…"
             let structure = try await ctl.build()
             let stamp = Int(Date().timeIntervalSince1970)
@@ -179,7 +183,8 @@ struct ScanView: View {
             let haveUSDZ = (try? structure.export(to: usdzURL)) != nil
 
             uploadStep = "Queueing the uploads…"
-            let files = [jsonURL] + (haveUSDZ ? [usdzURL] : []) + [video, depth].compactMap { $0 }
+            // The scan first (the floor plan is made from it alone), the video last: it is the biggest.
+            let files = [jsonURL] + (haveUSDZ ? [usdzURL] : []) + [poses, depth, video].compactMap { $0 }
             let space = space
             try await Task.detached {   // copying a long video into chunks takes a moment
                 for f in files { try Uploader.shared.enqueue(space, file: f, filename: f.lastPathComponent) }

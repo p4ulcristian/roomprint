@@ -12,31 +12,12 @@
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+  "@mkkellogg/gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js"
 } }
 </script>
 </head>
 <body class="viewer">
-<header class="vbar">
-  <img class="vlogo" src="/static/icon-64.png" alt=""><h1 id="title">Roomprint</h1>
-  <div class="tabs hidden" id="tabs">
-    <button data-tab="3d">3D</button>
-    <button data-tab="plan">Blueprint</button>
-    <button data-tab="video" id="videoTab">Video</button>
-    <button data-tab="files">Files</button>
-  </div>
-  <div class="tools hidden" id="tools3d">
-    <label class="chip hidden" id="meshChip"><input type="checkbox" id="mesh"> Real scan</label>
-    <label class="chip"><input type="checkbox" id="cutaway" checked> Cut-away</label>
-    <label class="chip hidden" id="pointsChip"><input type="checkbox" id="points"> Point cloud</label>
-    <button class="secondary" id="resetBtn">Reset view</button>
-  </div>
-  <div class="tools hidden" id="toolsPlan">
-    <label class="chip"><input type="checkbox" id="furn" checked> Furniture</label>
-    <button class="secondary" id="printBtn">Print</button>
-    <button class="secondary" id="svgBtn">Download SVG</button>
-  </div>
-</header>
 <main class="stage">
   <div class="statusbox" id="statusBox">
     <div class="card">
@@ -46,7 +27,6 @@
     </div>
   </div>
   <div class="pane hidden" id="three"></div>
-  <div class="info hidden" id="info"></div>
   <div class="pane hidden" id="plan"></div>
   <div class="pane player hidden" id="video">
     <video id="player" controls playsinline preload="metadata"></video>
@@ -54,6 +34,49 @@
   </div>
   <div class="pane files hidden" id="files"></div>
 </main>
+
+<header class="chrome top">
+  <div class="pill glass titlepill"><img src="/static/icon-64.png" alt=""><h1 id="title">Roomprint</h1></div>
+  <nav class="pill glass tabs hidden" id="tabs">
+    <button data-tab="3d">3D</button>
+    <button data-tab="plan" id="planTab">Plan</button>
+    <button data-tab="video" id="videoTab">Video</button>
+    <button data-tab="files">Files</button>
+  </nav>
+  <div class="pill glass hidden" id="exportPill"><button class="accent" id="exportBtn">Export</button></div>
+</header>
+
+<footer class="chrome bottom">
+  <div class="glass bubble hidden" id="info"></div>
+  <div class="glass crop hidden" id="cropPanel">
+    <div class="axis"><span>Width</span><div class="range2"><input type="range" id="cx0"><input type="range" id="cx1"></div><output id="cxo"></output></div>
+    <div class="axis"><span>Depth</span><div class="range2"><input type="range" id="cy0"><input type="range" id="cy1"></div><output id="cyo"></output></div>
+    <div class="axis"><span>Height</span><div class="range2"><input type="range" id="cz0"><input type="range" id="cz1"></div><output id="czo"></output></div>
+    <p class="muted small" style="margin:6px 0 0">Exports of the scan and its point cloud keep only what is inside the box.</p>
+  </div>
+  <div class="pill glass dock hidden" id="tools3d">
+    <button data-mode="model" id="modeModel">Model</button>
+    <button data-mode="scan" id="modeScan">Real scan</button>
+    <button data-mode="splat" id="modeSplat">Splat</button>
+    <span class="sep" id="modeSep"></span>
+    <label class="chip" id="cutChip"><input type="checkbox" id="cutaway" checked>Cut-away</label>
+    <label class="chip hidden" id="pointsChip"><input type="checkbox" id="points">Points</label>
+    <label class="chip"><input type="checkbox" id="measure">Measure</label>
+    <label class="chip hidden" id="cropChip"><input type="checkbox" id="crop">Crop</label>
+    <button id="clearBtn" class="hidden">Clear</button>
+    <button id="resetBtn">Reset</button>
+  </div>
+  <div class="pill glass dock hidden" id="toolsPlan">
+    <label class="chip"><input type="checkbox" id="furn" checked>Furniture</label>
+    <button id="printBtn">Print</button>
+  </div>
+</footer>
+
+<aside class="sheet glass hidden" id="exportSheet">
+  <h2>Export <button class="x" id="exportClose" aria-label="Close">✕</button></h2>
+  <p class="muted small">Files are made when you ask for them; a big one takes up to a minute to start.</p>
+  <div id="exportList"></div>
+</aside>
 <script type="module" src="/static/viewer.js"></script>
 </body>
 </html>
