@@ -26,7 +26,7 @@ import numpy as np
 DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 SPACES = DATA_DIR / "spaces"
 NEED_VRAM_MB = int(os.environ.get("NEED_VRAM_MB", "10000"))
-SPLAT_VRAM_MB = int(os.environ.get("SPLAT_VRAM_MB", "6000"))
+SPLAT_VRAM_MB = int(os.environ.get("SPLAT_VRAM_MB", "3000"))   # the trainer peaks near 1.5 GB
 VIDEO_EXT = {".mov", ".mp4", ".m4v", ".webm", ".mkv", ".avi"}
 
 
@@ -255,7 +255,12 @@ def side_job(space_id: str, what: str, out: str, fn):
     the space's status but leaves the floor plan's own result line alone; a failure is
     remembered in <out>.failed so it is not tried again until the inputs change."""
     d = SPACES / space_id
-    step = (read_json(d / "status.json") or {}).get("step", "")
+    st = read_json(d / "status.json") or {}
+    if st.get("state") == "done":
+        step = st.get("step", "")
+    else:   # a job before this one was cut off (a restart): say what the space is instead
+        space = read_json(d / "space.json") or {}
+        step = "free scan" if space.get("kind") == "free" else f"{len(space.get('rooms', []))} rooms"
     failed = (d / out).with_suffix(".failed")
     try:
         set_status(d, "processing", what, 0.05)

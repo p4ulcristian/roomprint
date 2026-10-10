@@ -51,7 +51,7 @@ into, in this order, each on its own so the floor plan never waits for the rest:
    (`POST /api/s/<token>/splat`, the viewer's Export sheet), because it holds the GPU for
    minutes. It is trained by [Brush](https://github.com/ArthurBrussee/brush), a prebuilt
    trainer that runs through Vulkan; set `BRUSH` to its `brush_app` binary. The worker
-   waits for `SPLAT_VRAM_MB` (default 6000) of free VRAM.
+   waits for `SPLAT_VRAM_MB` (default 3000) of free VRAM; training peaks near 1.5 GB.
 
 ## Exports
 
