@@ -53,7 +53,7 @@ async function load() {
   $("modeSplat").classList.toggle("hidden", summary.splat !== "ready");
   const modes = [...document.querySelectorAll("#tools3d [data-mode]:not(.hidden)")];
   for (const b of [...modes, $("modeSep")]) b.classList.toggle("hidden", modes.length < 2);
-  mode ??= free ? "scan" : "model";
+  mode ??= free || summary.has_mesh ? "scan" : "model";   // the real scan first, when there is one
   show({ "#plan": free ? "3d" : "plan", "#files": "files", "#video": "video" }[location.hash] ?? "3d");
 }
 
