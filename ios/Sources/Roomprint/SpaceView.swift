@@ -10,7 +10,6 @@ struct SpaceView: View {
     @State private var kept: [KeptScan] = []
     @State private var showKept = false
     @State private var resume: KeptScan?
-    @AppStorage("wantPlan") private var wantPlan = true
     @State private var showFiles = false
     @State private var askDelete = false
     @State private var deleteError: String?
@@ -106,7 +105,7 @@ struct SpaceView: View {
         }
     }
 
-    /// Nothing to show yet: the two ways to scan, or word that a scan is on its way.
+    /// Nothing to show yet: the way to scan, or word that a scan is on its way.
     private var empty: some View {
         let coming = summary?.clips.isEmpty == false || summary?.busy == true || (uploader.progress[space.token]?.total ?? 0) > 0
         return VStack(spacing: 18) {
@@ -117,12 +116,9 @@ struct SpaceView: View {
                     .multilineTextAlignment(.center).foregroundStyle(.secondary)
             } else if CaptureController.isSupported {
                 Text("Nothing scanned yet").font(.title2.weight(.semibold))
-                choice("Scan", wantPlan && CaptureController.canPlan
+                choice("Scan", CaptureController.canPlan
                        ? "A 3D model in real colours and a measured floor plan, from one walk."
                        : "A 3D model in real colours of anything: a room, an object, a garden corner.", "viewfinder")
-                if CaptureController.canPlan {
-                    Toggle("Floor plan too", isOn: $wantPlan).padding(.horizontal, 16)
-                }
             } else {
                 Text("This phone has no LiDAR").font(.title2.weight(.semibold))
                 Text("Scanning needs an iPhone Pro (12 Pro or newer). You can still open spaces others scanned.")
@@ -139,12 +135,13 @@ struct SpaceView: View {
         .padding(24)
     }
 
-    private func scan(plan: Bool) {
-        capture = ScanStore.new(token: space.token, plan: plan && CaptureController.canPlan)
+    /// Every scan comes with a floor plan where the phone can make one.
+    private func scan() {
+        capture = ScanStore.new(token: space.token, plan: CaptureController.canPlan)
     }
 
     private func choice(_ title: String, _ what: String, _ icon: String) -> some View {
-        Button { scan(plan: wantPlan) } label: {
+        Button { scan() } label: {
             HStack(spacing: 14) {
                 Image(systemName: icon).font(.title2).frame(width: 36)
                 VStack(alignment: .leading, spacing: 2) {
@@ -163,10 +160,7 @@ struct SpaceView: View {
 
     private func scanMenu<L: View>(@ViewBuilder label: () -> L) -> some View {
         Menu {
-            Button { scan(plan: true) } label: { Label(CaptureController.canPlan ? "Scan with a floor plan" : "Scan", systemImage: "viewfinder") }
-            if CaptureController.canPlan {
-                Button { scan(plan: false) } label: { Label("Scan without a floor plan", systemImage: "cube.transparent") }
-            }
+            Button { scan() } label: { Label("Scan", systemImage: "viewfinder") }
             if !kept.isEmpty {
                 Divider()
                 Button { showKept = true } label: { Label("Scans on this phone (\(kept.count))", systemImage: "iphone") }

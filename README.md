@@ -73,10 +73,10 @@ viewer's Crop tool sets it. The viewer also measures between any two tapped poin
 ## iOS app (`ios/`)
 
 One scan screen (`Capture.swift`): the walk is filmed with sound, and its LiDAR depth
-and camera poses recorded; with "Floor plan too" on, Apple's RoomPlan runs beside it on
+and camera poses recorded; Apple's RoomPlan always runs beside it on
 the same AR session, so one walk gives the coloured 3D model and the measured floor plan
 (`.roomplan`, which `worker/roomplan.py` turns into `space.json` without the GPU).
-Without rooms the scan is a free scan (`.freescan`): a model of anything, no plan.
+Only a phone that cannot run RoomPlan makes a free scan (`.freescan`): a model, no plan.
 
 While scanning, the scan so far shows (`LiveScan.swift`): ARKit's live mesh coloured
 from the depth frames, as a wireframe on the surfaces in the camera view (red where seen
