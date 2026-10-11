@@ -54,7 +54,22 @@ async function load() {
   const modes = [...document.querySelectorAll("#tools3d [data-mode]:not(.hidden)")];
   for (const b of [...modes, $("modeSep")]) b.classList.toggle("hidden", modes.length < 2);
   mode ??= free || summary.has_mesh ? "scan" : "model";   // the real scan first, when there is one
+  watch();
   show({ "#plan": free ? "3d" : "plan", "#files": "files", "#video": "video" }[location.hash] ?? "3d");
+}
+
+// The floor plan is ready long before the real scan and its photo texture: while more is
+// on its way the page looks again, and shows itself anew when one of them has arrived.
+function watch() {
+  const got = [summary.has_mesh, summary.has_textured].join();
+  const depth = summary.clips.some(c => /\.rgbd$/i.test(c.filename));
+  const coming = () => ["queued", "processing"].includes(summary.status.state) || summary.pending.length || (depth && !summary.has_mesh);
+  if (!coming()) return;
+  const timer = setInterval(async () => {
+    try { await fetchSummary(); } catch { return; }
+    if ([summary.has_mesh, summary.has_textured].join() !== got) location.reload();
+    else if (!coming()) clearInterval(timer);
+  }, 6000);
 }
 
 function showStatus(text) {
