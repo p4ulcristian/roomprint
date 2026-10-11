@@ -17,6 +17,7 @@
 //          PUT    /api/s/<token>/clips/<clip>?offset=N   raw chunk body -> {received, complete}
 //          DELETE /api/s/<token>/clips/<clip>
 //          GET    /api/s/<token>/clips/<clip>/file   the uploaded file (Range requests, for video)
+//          GET    /api/s/<token>/clips/<clip>/play   a video as browsers can play it (H.264; made once, on first need)
 //          POST   /api/s/<token>/submit              -> status queued
 //          GET    /api/s/<token>/status | space.json | preview.ply | mesh.ply | textured.glb | splat.splat
 //          GET    /api/s/<token>/export/<kind>.<format>[?crop=x0,y0,z0,x1,y1,z1]   see web/exports.ts
@@ -186,6 +187,7 @@ async function putChunk(meta: Meta, clip: string, req: Request, url: URL): Promi
     const dir = join(spaceDir(meta.id), "uploads");
     mkdirSync(dir, { recursive: true });
     renameSync(partPath(meta.id, p), join(dir, `${p.id}.${p.ext}`));
+    if (VIDEO_EXT.includes(p.ext)) playable(meta.id, p.id, p.ext);   // ready by the time someone opens the Video tab
     const c: Clip = { id: p.id, room_name: p.room_name, filename: p.filename, bytes: p.bytes, uploaded: now() };
     writeJson(join(dir, `${p.id}.json`), c);
     unlinkSync(pendingPath(meta.id, p.id));
@@ -233,19 +235,63 @@ const FILE_TYPES: Record<string, string> = {
   freescan: "application/json", poses: "application/octet-stream",
 };
 
+// The app films in HEVC, which most browsers outside Apple's cannot show (the picture
+// stays black, the sound plays). The Video tab gets an H.264 copy, kept with the exports.
+const playJobs = new Map<string, Promise<string>>();
+function playable(id: string, clip: string, ext: string): Promise<string> {
+  const src = join(spaceDir(id), "uploads", `${clip}.${ext}`);
+  const out = join(spaceDir(id), "exports", `play-${clip}.mp4`);
+  if (existsSync(out)) return Promise.resolve(out);
+  let job = playJobs.get(out);
+  if (!job) {
+    job = (async () => {
+      const probe = Bun.spawn(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", src], { stdout: "pipe", stderr: "ignore" });
+      const codec = (await new Response(probe.stdout).text()).trim();
+      if (codec === "h264" || codec === "vp8" || codec === "vp9") return src;
+      mkdirSync(join(spaceDir(id), "exports"), { recursive: true });
+      const tmp = join(spaceDir(id), "exports", `tmp-play-${clip}.mp4`);
+      const enc = Bun.spawn(["nice", "-n", "10", "ffmpeg", "-y", "-v", "error", "-i", src, "-vf", "scale=-2:'min(1280,ih)'",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart", tmp], { stdout: "ignore", stderr: "pipe" });
+      const [code, errText] = await Promise.all([enc.exited, new Response(enc.stderr).text()]);
+      if (code !== 0 || !existsSync(tmp)) {
+        console.error(`web video failed (${code}) for ${id}/${clip}: ${errText.slice(-400)}`);
+        return src;   // better the original than nothing: Safari plays it
+      }
+      renameSync(tmp, out);
+      return out;
+    })().finally(() => playJobs.delete(out));
+    playJobs.set(out, job);
+  }
+  return job;
+}
+
+async function clipPlay(meta: Meta, clip: string, req: Request): Promise<Response> {
+  const c = readJson<Clip>(join(spaceDir(meta.id), "uploads", `${clip}.json`));
+  const ext = c ? extname(c.filename).slice(1).toLowerCase() : "";
+  if (!c || !VIDEO_EXT.includes(ext) || !existsSync(join(spaceDir(meta.id), "uploads", `${clip}.${ext}`))) return err("no such video", 404);
+  const path = await playable(meta.id, clip, ext);
+  return sendFile(path, path.endsWith(".webm") ? "video/webm" : "video/mp4", c.filename, req);
+}
+
 function clipFile(meta: Meta, clip: string, req: Request): Response {
   const c = readJson<Clip>(join(spaceDir(meta.id), "uploads", `${clip}.json`));
   if (!c) return err("no such clip", 404);
   const ext = extname(c.filename).slice(1).toLowerCase();
   const path = join(spaceDir(meta.id), "uploads", `${clip}.${ext}`);
   if (!existsSync(path)) return err("no such clip", 404);
+  return sendFile(path, FILE_TYPES[ext] ?? "application/octet-stream", c.filename, req);
+}
+
+// A file with Range support, so video can seek.
+function sendFile(path: string, type: string, name: string, req: Request): Response {
   const file = Bun.file(path);
   const size = file.size;
   const headers: Record<string, string> = {
-    "content-type": FILE_TYPES[ext] ?? "application/octet-stream",
+    "content-type": type,
     "accept-ranges": "bytes",
     "cache-control": "private, max-age=3600",
-    "content-disposition": `inline; filename="${c.filename.replace(/[^\w.-]/g, "_")}"`,
+    "content-disposition": `inline; filename="${name.replace(/[^\w.-]/g, "_")}"`,
   };
   const range = req.headers.get("range")?.match(/^bytes=(\d*)-(\d*)$/);
   if (range && (range[1] || range[2])) {
@@ -456,6 +502,8 @@ async function handle(req: Request): Promise<Response> {
   if (ex && m === "GET") return exportFile(meta, ex[1], ex[2], url);
   if (sub === "/clips" && m === "POST") return createClip(meta, req);
 
+  const pl = sub.match(/^\/clips\/([\w-]+)\/play$/);
+  if (pl && validClip(pl[1]) && m === "GET") return clipPlay(meta, pl[1], req);
   const f = sub.match(/^\/clips\/([\w-]+)\/file$/);
   if (f && validClip(f[1]) && m === "GET") return clipFile(meta, f[1], req);
 

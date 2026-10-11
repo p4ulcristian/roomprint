@@ -249,8 +249,15 @@ function drawVideo(id) {
   const list = videos();
   if (!list.length) return;
   const pick = list.find(c => c.id === (id ?? playing)) ?? list[0];
-  const src = `${API}/clips/${pick.id}/file`;
-  if (playing !== pick.id) { $("player").src = src; playing = pick.id; }
+  // /play is a copy every browser can show; the first time it is asked for, it is still being made
+  const src = `${API}/clips/${pick.id}/play`;
+  if (playing !== pick.id) {
+    const v = $("player");
+    $("vwait").classList.remove("hidden");
+    v.onloadeddata = v.onerror = () => $("vwait").classList.add("hidden");
+    v.src = src;
+    playing = pick.id;
+  }
   const strip = $("vlist");
   strip.classList.toggle("hidden", list.length < 2);
   strip.innerHTML = list.map((c, i) =>
