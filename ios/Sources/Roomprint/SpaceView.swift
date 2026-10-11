@@ -30,6 +30,7 @@ struct SpaceView: View {
                 ViewerWeb(space: me) { url in Task { await files.fetch(url) } }
                     .id(s.shown)
                     .ignoresSafeArea(edges: .bottom)
+                    .background(NoSwipeBack())
             } else if summary != nil {
                 empty
             } else if let error {
@@ -277,6 +278,30 @@ struct FilesSheet: View {
             onChange()
         } catch {
             self.error = "Could not delete it: \(error.localizedDescription)"
+        }
+    }
+}
+
+/// Turns swiping back off for the page it is on: a finger turning the model or the plan
+/// from the screen's edge would otherwise leave the space. The back button stays.
+struct NoSwipeBack: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Holder { Holder() }
+    func updateUIViewController(_ c: Holder, context: Context) {}
+
+    final class Holder: UIViewController {
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            set(false)
+        }
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            set(true)
+        }
+        private func set(_ on: Bool) {
+            guard let nav = navigationController else { return }
+            nav.interactivePopGestureRecognizer?.isEnabled = on
+            // iOS 26 also goes back on a swipe anywhere on the page.
+            if #available(iOS 26.0, *) { nav.interactiveContentPopGestureRecognizer?.isEnabled = on }
         }
     }
 }
