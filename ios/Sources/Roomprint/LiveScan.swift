@@ -179,15 +179,29 @@ final class LiveScan: ObservableObject {
     /// RoomPlan's walls, doors and windows so far, drawn into the camera view and the map.
     func plan(_ surfaces: [(transform: simd_float4x4, size: SIMD3<Float>, opening: Bool)]) {
         for n in wallsSeen.childNodes + wallsMapped.childNodes { n.removeFromParentNode() }
+        // Where RoomPlan has a wall, its outline says it all: the mesh is not drawn there.
+        grid.hide(surfaces.map { ($0.transform.inverse, $0.size / 2) })
         for s in surfaces {
-            let seen = SCNBox(width: CGFloat(s.size.x), height: CGFloat(s.size.y), length: 0.03, chamferRadius: 0)
-            seen.firstMaterial?.lightingModel = .constant
-            seen.firstMaterial?.diffuse.contents = s.opening ? UIColor.systemBlue : UIColor.white
-            seen.firstMaterial?.transparency = s.opening ? 0.3 : 0.14
-            seen.firstMaterial?.isDoubleSided = true
-            seen.firstMaterial?.writesToDepthBuffer = false
-            let a = SCNNode(geometry: seen)
+            // In the camera view: the outline of the wall, door or window, and the faintest fill.
+            let a = SCNNode()
             a.simdTransform = s.transform
+            let colour = s.opening ? UIColor.systemBlue : UIColor.white
+            let w = CGFloat(s.size.x), h = CGFloat(s.size.y), bar: CGFloat = 0.014
+            for (bw, bh, x, y) in [(w, bar, 0, h / 2), (w, bar, 0, -h / 2), (bar, h, w / 2, 0), (bar, h, -w / 2, 0)] {
+                let edge = SCNBox(width: bw, height: bh, length: bar, chamferRadius: 0)
+                edge.firstMaterial?.lightingModel = .constant
+                edge.firstMaterial?.diffuse.contents = colour
+                let e = SCNNode(geometry: edge)
+                e.position = SCNVector3(Float(x), Float(y), 0)
+                a.addChildNode(e)
+            }
+            let fill = SCNPlane(width: w, height: h)
+            fill.firstMaterial?.lightingModel = .constant
+            fill.firstMaterial?.diffuse.contents = colour
+            fill.firstMaterial?.transparency = 0.06
+            fill.firstMaterial?.isDoubleSided = true
+            fill.firstMaterial?.writesToDepthBuffer = false
+            a.addChildNode(SCNNode(geometry: fill))
             wallsSeen.addChildNode(a)
             let mapped = SCNBox(width: CGFloat(s.size.x), height: CGFloat(s.size.y), length: 0.09, chamferRadius: 0)
             mapped.firstMaterial?.lightingModel = .constant
@@ -472,6 +486,8 @@ final class VoxelGrid: @unchecked Sendable {
     private let lock = NSLock()
     private var waiting = 0
     private var _cells = 0
+    /// RoomPlan's surfaces, each as the way into its own axes and half its size.
+    private var walls: [(into: simd_float4x4, half: SIMD3<Float>)] = []
     private var _matched = (found: 0, done: 0, total: 0)
     var matched: (found: Int, done: Int, total: Int) { lock.withLock { _matched } }
     /// Cells seen so far.
@@ -590,22 +606,43 @@ final class VoxelGrid: @unchecked Sendable {
                 wt.reserveCapacity(corners)
                 we.reserveCapacity(corners)
                 let edge = [SIMD2<Float>(0, 0.5), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1)]
-                for i in 0..<corners where Int(idx[i]) < n {
-                    wp.append(p[Int(idx[i])])
-                    wt.append(t[Int(idx[i])])
-                    we.append(edge[i % 3])
+                let hidden = walls.isEmpty ? [] : p.map(onWall)
+                var whole = true, f = 0
+                while f + 2 < corners {
+                    let tri = [Int(idx[f]), Int(idx[f + 1]), Int(idx[f + 2])]
+                    f += 3
+                    guard tri[0] < n, tri[1] < n, tri[2] < n else { whole = false; break }
+                    if !hidden.isEmpty, hidden[tri[0]], hidden[tri[1]], hidden[tri[2]] { continue }
+                    for j in 0..<3 {
+                        wp.append(p[tri[j]])
+                        wt.append(t[tri[j]])
+                        we.append(edge[j])
+                    }
                 }
-                let whole = wp.count == corners   // a bad index would shift every triangle after it
                 out.append(Part(id: a.identifier, positions: Self.data(p), colours: Self.data(c),
                                 indices: idx.withUnsafeBufferPointer { Data(buffer: $0) }, vertices: n, faces: faces,
                                 wire: Self.data(wp), wireTints: Self.data(wt), wireEdges: we.withUnsafeBufferPointer { Data(buffer: $0) },
-                                corners: whole ? corners : 0, lo: lo, hi: hi))
+                                corners: whole ? wp.count : 0, lo: lo, hi: hi))
             }
             let stats = (found, done, total)
             lock.withLock { _matched = stats }
             let made = out
             Task { @MainActor in then(made) }
         }
+    }
+
+    /// The mesh's wireframe is left out on these surfaces (RoomPlan's walls, doors, windows).
+    func hide(_ list: [(into: simd_float4x4, half: SIMD3<Float>)]) {
+        queue.async { [self] in walls = list }
+    }
+
+    private func onWall(_ p: SIMD3<Float>) -> Bool {
+        for w in walls {
+            let q = w.into * SIMD4<Float>(p, 1)
+            // a hand's breadth off the wall still counts: ARKit's mesh is not that exact
+            if abs(q.z) < 0.1, abs(q.x) < w.half.x + 0.05, abs(q.y) < w.half.y + 0.05 { return true }
+        }
+        return false
     }
 
     func forget(_ ids: [UUID]) {
