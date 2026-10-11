@@ -39,8 +39,9 @@
 <header class="chrome top">
   <div class="pill glass titlepill"><img src="/static/icon-64.png" alt=""><h1 id="title">Roomprint</h1></div>
   <nav class="pill glass tabs hidden" id="tabs">
-    <button data-tab="3d">3D</button>
-    <button data-tab="plan" id="planTab">Plan</button>
+    <button data-tab="lidar" id="lidarTab">Lidar</button>
+    <button data-tab="3d" id="modelTab">3D</button>
+    <button data-tab="plan" id="planTab">Blueprint</button>
     <button data-tab="video" id="videoTab">Video</button>
     <button data-tab="files">Files</button>
   </nav>
@@ -56,8 +57,7 @@
     <p class="muted small" style="margin:6px 0 0">Exports of the scan and its point cloud keep only what is inside the box.</p>
   </div>
   <div class="pill glass dock hidden" id="tools3d">
-    <button data-mode="model" id="modeModel">Model</button>
-    <button data-mode="scan" id="modeScan">Real scan</button>
+    <button data-mode="scan" id="modeScan">Scan</button>
     <button data-mode="splat" id="modeSplat">Splat</button>
     <span class="sep" id="modeSep"></span>
     <label class="chip" id="cutChip"><input type="checkbox" id="cutaway" checked>Cut-away</label>

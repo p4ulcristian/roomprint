@@ -1,5 +1,6 @@
-// Viewer: status while processing, then the 3D view, the plan, the video and the files
-// of a space, with exports, a measuring tool and a crop box.
+// Viewer: status while processing, then the tabs of a space: Lidar (the real scan), 3D
+// (the model drawn from the floor plan), Blueprint, Video and Files, with exports, a
+// measuring tool and a crop box. Lidar and 3D are one 3D view in two modes.
 import { normalize, fmtM } from "./geom.js";
 import { renderBlueprint } from "./blueprint.js";
 
@@ -23,7 +24,7 @@ const STATE_TEXT = {
   failed: "Processing failed",
 };
 
-let space = null, summary = null, view3d = null, tab = null, mode = null, cropBox = null;
+let space = null, summary = null, view3d = null, tab = null, mode = null, lidarMode = "scan", cropBox = null;
 
 async function fetchSummary() {
   summary = await (await fetch(API)).json();
@@ -39,23 +40,22 @@ async function load() {
   const res = await fetch(`${API}/space.json`);
   if (!res.ok) return showStatus();
   space = normalize(await res.json());
-  // A free scan has no rooms: its 3D view is the real scan, and there is no plan to draw.
+  // A free scan has no rooms: it has the Lidar tab only, no drawn model and no plan.
   const free = !space.rooms.length;
   if (free && !summary.has_mesh) return showStatus("Building the 3D model from the scan");
   $("statusBox").classList.add("hidden");
   $("tabs").classList.remove("hidden");
   $("exportPill").classList.toggle("hidden", !Object.keys(summary.exports).length);
+  $("lidarTab").classList.toggle("hidden", !summary.has_mesh);
+  $("modelTab").classList.toggle("hidden", free);
   $("planTab").classList.toggle("hidden", free);
   $("videoTab").classList.toggle("hidden", !videos().length);
   $("pointsChip").classList.toggle("hidden", !summary.has_preview);
-  $("modeModel").classList.toggle("hidden", free);
-  $("modeScan").classList.toggle("hidden", !summary.has_mesh);
-  $("modeSplat").classList.toggle("hidden", summary.splat !== "ready");
-  const modes = [...document.querySelectorAll("#tools3d [data-mode]:not(.hidden)")];
-  for (const b of [...modes, $("modeSep")]) b.classList.toggle("hidden", modes.length < 2);
-  mode ??= free || summary.has_mesh ? "scan" : "model";   // the real scan first, when there is one
   watch();
-  show({ "#plan": free ? "3d" : "plan", "#files": "files", "#video": "video" }[location.hash] ?? "3d");
+  // The tab asked for, when this space has it; else the real scan first, when there is one.
+  const has = { lidar: summary.has_mesh, "3d": !free, plan: !free, video: videos().length > 0, files: true };
+  const want = location.hash.slice(1);
+  show(has[want] ? want : summary.has_mesh ? "lidar" : "3d");
 }
 
 // The floor plan is ready long before the real scan and its photo texture: while more is
@@ -92,14 +92,17 @@ async function show(name) {
   tab = name;
   history.replaceState(null, "", location.search + "#" + name);
   for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("on", b.dataset.tab === name);
-  $("three").classList.toggle("hidden", name !== "3d");
+  const three = name === "lidar" || name === "3d";
+  $("three").classList.toggle("hidden", !three);
   $("plan").classList.toggle("hidden", name !== "plan");
   $("files").classList.toggle("hidden", name !== "files");
   $("video").classList.toggle("hidden", name !== "video");
   if (name !== "video") $("player").pause();
-  $("tools3d").classList.toggle("hidden", name !== "3d");
+  $("tools3d").classList.toggle("hidden", !three);
   $("toolsPlan").classList.toggle("hidden", name !== "plan");
-  $("cropPanel").classList.toggle("hidden", name !== "3d" || !$("crop").checked);
+  $("cropPanel").classList.toggle("hidden", name !== "lidar" || !$("crop").checked);
+  // The splat is another look of the real scan: its switch is in the Lidar tab, once there is one.
+  for (const id of ["modeScan", "modeSplat", "modeSep"]) $(id).classList.toggle("hidden", name !== "lidar" || summary.splat !== "ready");
   say(null);
 
   if (name === "plan") {
@@ -112,8 +115,8 @@ async function show(name) {
     view3d?.setActive(false);
     drawVideo();
   } else {
-    if (!view3d) {
-      try {
+    try {
+      if (!view3d) {
         const { create3D } = await import("./view3d.js");
         view3d = create3D($("three"), space, {
           onRoom: showRoomInfo, onMeasure: showMeasure,
@@ -123,13 +126,14 @@ async function show(name) {
           },
         });
         view3d.setCutaway($("cutaway").checked);
-        await setMode(mode);
-      } catch (e) {
-        $("three").innerHTML = `<div class="statusbox"><div class="card err">The 3D view could not start (${esc(e.message)}).</div></div>`;
-        return;
       }
+    } catch (e) {
+      $("three").innerHTML = `<div class="statusbox"><div class="card err">The 3D view could not start (${esc(e.message)}).</div></div>`;
+      return;
     }
-    if (tab === "3d") view3d.setActive(true);
+    if (tab === name) view3d.setActive(true);
+    const next = name === "3d" ? "model" : lidarMode;
+    if (mode !== next) await setMode(next);
   }
 }
 
@@ -146,6 +150,7 @@ async function setMode(next) {
   try {
     await view3d.setMode(next);
     mode = next;
+    if (next !== "model") lidarMode = next;
     say(null);
   } catch (e) {
     say(`Could not load it: ${e.message}`);
@@ -209,7 +214,7 @@ const tellApp = () => window.webkit?.messageHandlers?.roomprint?.postMessage({ c
 // ---------- exports ----------
 
 const KINDS = [
-  ["mesh", "Real scan", "The scanned rooms as a 3D mesh", { glb: "GLB", obj: "OBJ", usdz: "USDZ · AR", stl: "STL", ply: "PLY" }],
+  ["mesh", "Lidar scan", "The scanned rooms as a 3D mesh", { glb: "GLB", obj: "OBJ", usdz: "USDZ · AR", stl: "STL", ply: "PLY" }],
   ["points", "Point cloud", "Coloured points on the scan's surfaces", { ply: "PLY", las: "LAS", xyz: "XYZ" }],
   ["plan", "Floor plan", "Walls, doors, windows and measurements", { pdf: "PDF · 1:50", svg: "SVG", png: "PNG", dxf: "DXF · CAD" }],
   ["model", "Drawn model", "The clean 3D model made from the floor plan", { glb: "GLB", obj: "OBJ", usdz: "USDZ · AR", stl: "STL" }],
@@ -297,8 +302,8 @@ function drawFiles() {
         <a rel="ar" class="btn secondary" href="${url}"><img alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="1" height="1">Open the 3D model</a></section>`;
     const what = /\.roomplan$/i.test(c.filename) ? "LiDAR scan data (JSON)"
       : /\.freescan$/i.test(c.filename) ? "A free scan's note (JSON)"
-      : /\.rgbd$/i.test(c.filename) ? "Depth measurements and small photos from the scan; the Real scan 3D model is made from them"
-      : /\.poses$/i.test(c.filename) ? "Where the camera was for every frame of the video; the Real scan's photo texture is made with it"
+      : /\.rgbd$/i.test(c.filename) ? "Depth measurements and small photos from the scan; the Lidar tab's 3D model is made from them"
+      : /\.poses$/i.test(c.filename) ? "Where the camera was for every frame of the video; the Lidar scan's photo texture is made with it"
       : "Uploaded file";
     return `<section class="card">${head}<p class="muted small">${what}</p><a class="btn secondary" href="${url}" download="${esc(c.filename)}">Download</a></section>`;
   });

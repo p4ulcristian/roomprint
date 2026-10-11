@@ -264,8 +264,8 @@ struct FilesSheet: View {
     /// What else goes when a file is deleted: the models made from it hold its content.
     static func derived(_ filename: String) -> String {
         switch (filename as NSString).pathExtension.lowercased() {
-        case "rgbd": return "The depth and photos are deleted from the server right away, for good, and so are the Real scan 3D model, its photo texture and the splat made from them."
-        case "mov", "mp4", "m4v", "poses": return "“\(kind(filename))” is deleted from the server right away, for good, and so are the Real scan's photo texture and the splat made from it. The floor plan stays until you delete the space."
+        case "rgbd": return "The depth and photos are deleted from the server right away, for good, and so are the Lidar scan, its photo texture and the splat made from them."
+        case "mov", "mp4", "m4v", "poses": return "“\(kind(filename))” is deleted from the server right away, for good, and so are the Lidar scan's photo texture and the splat made from it. The floor plan stays until you delete the space."
         default: return "“\(kind(filename))” is deleted from the server right away, for good. The floor plan made from it stays until you delete the space."
         }
     }
