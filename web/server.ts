@@ -213,18 +213,19 @@ function deleteClip(meta: Meta, clip: string): Response {
   const ext = extname(c.filename).slice(1).toLowerCase();
   try { unlinkSync(join(dir, `${clip}.${ext}`)); } catch {}
   unlinkSync(join(dir, `${clip}.json`));
-  dropDerived(meta.id, ext);
+  dropDerived(meta.id, ext, clip);
   return json({ ok: true });
 }
 
 // What was made from a deleted upload holds its content (the scan's colours, the photos),
 // so it goes with it: the fused mesh with the depth file, and the textured model, the
 // splat and every cached export with any of the files they were made from.
-function dropDerived(id: string, ext: string) {
+function dropDerived(id: string, ext: string, clip: string) {
   const gone = ext === "rgbd" ? ["mesh.ply", "mesh.failed"] : [];
   if (["rgbd", "poses", ...VIDEO_EXT].includes(ext)) gone.push("textured.glb", "textured.failed", "splat.ply", "splat.splat", "splat.failed", "splat.request");
   for (const f of gone) try { unlinkSync(join(spaceDir(id), f)); } catch {}
   rmSync(join(spaceDir(id), "exports"), { recursive: true, force: true });
+  rmSync(join(spaceDir(id), "play", `${clip}.mp4`), { force: true });
 }
 
 const FILE_TYPES: Record<string, string> = {
@@ -240,7 +241,9 @@ const FILE_TYPES: Record<string, string> = {
 const playJobs = new Map<string, Promise<string>>();
 function playable(id: string, clip: string, ext: string): Promise<string> {
   const src = join(spaceDir(id), "uploads", `${clip}.${ext}`);
-  const out = join(spaceDir(id), "exports", `play-${clip}.mp4`);
+  // Its own folder, not exports/: the worker clears that one whenever the model changes,
+  // which is just when a fresh upload's copy is being written.
+  const out = join(spaceDir(id), "play", `${clip}.mp4`);
   if (existsSync(out)) return Promise.resolve(out);
   let job = playJobs.get(out);
   if (!job) {
@@ -248,8 +251,8 @@ function playable(id: string, clip: string, ext: string): Promise<string> {
       const probe = Bun.spawn(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", src], { stdout: "pipe", stderr: "ignore" });
       const codec = (await new Response(probe.stdout).text()).trim();
       if (codec === "h264" || codec === "vp8" || codec === "vp9") return src;
-      mkdirSync(join(spaceDir(id), "exports"), { recursive: true });
-      const tmp = join(spaceDir(id), "exports", `tmp-play-${clip}.mp4`);
+      mkdirSync(join(spaceDir(id), "play"), { recursive: true });
+      const tmp = join(spaceDir(id), "play", `tmp-${clip}.mp4`);
       const enc = Bun.spawn(["nice", "-n", "10", "ffmpeg", "-y", "-v", "error", "-i", src, "-vf", "scale=-2:'min(1280,ih)'",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart", tmp], { stdout: "ignore", stderr: "pipe" });
