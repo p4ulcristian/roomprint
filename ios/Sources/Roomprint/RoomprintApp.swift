@@ -18,7 +18,7 @@ struct RoomprintApp: App {
         }
         // Uploads queued while offline, or cut off by a force quit, go on from here.
         .onChange(of: phase) { _, now in
-            if now == .active { Task { await uploader.resume(); await store.claimMissing() } }
+            if now == .active { Task { await uploader.resume(); await store.claimMissing(); await store.tellDevice() } }
         }
     }
 }
@@ -57,9 +57,15 @@ final class Store: ObservableObject {
         }
     }
 
-    func create(_ name: String) async {
+    /// A new space, named by the day and its number on that day: "11 Oct · 2".
+    func create() async {
+        let day = Date().formatted(.dateTime.day().month(.abbreviated))
+        let last = spaces.compactMap { s -> Int? in
+            guard s.name.hasPrefix("\(day) · ") else { return nil }
+            return Int(s.name.dropFirst(day.count + 3))
+        }.max() ?? 0
         do {
-            let s = try await API.createSpace(name: name.trimmingCharacters(in: .whitespaces))
+            let s = try await API.createSpace(name: "\(day) · \(last + 1)")
             spaces.insert(s, at: 0)
             save()
             error = nil
@@ -100,6 +106,17 @@ final class Store: ObservableObject {
             if let i = spaces.firstIndex(where: { $0.token == s.token }) { spaces[i].ownerKey = key }
             save()
         }
+    }
+
+    /// Spaces this phone made before the app told its phone apart are marked as its own, once.
+    func tellDevice() async {
+        let key = "deviceTold"
+        var told = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+        for s in spaces where s.ownerKey != nil && s.base == API.defaultBase && !told.contains(s.token) {
+            guard (try? await API.tellDevice(s)) != nil else { continue }
+            told.insert(s.token)
+        }
+        UserDefaults.standard.set(Array(told), forKey: key)
     }
 
     private func save() {

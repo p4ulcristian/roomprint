@@ -76,7 +76,7 @@ function staticFile(path: string): Response | null {
 
 function summary(meta: Meta) {
   const dir = spaceDir(meta.id);
-  const { token: _t, owner_hash: _o, ...pub } = meta;
+  const { token: _t, owner_hash: _o, device: _d, device_model: _m, ...pub } = meta;
   return {
     meta: pub,
     status: getStatus(meta.id),
@@ -338,7 +338,35 @@ async function newSpace(req: Request): Promise<Response> {
   const body = await req.json().catch(() => ({}));
   const name = String(body?.name ?? "").trim().slice(0, 80) || "New space";
   const meta = createSpace(name);
+  setDevice(meta, body);
   return json({ token: meta.token, name: meta.name, owner: setOwner(meta) });
+}
+
+// Which phone a space came from, as the app tells it (a number it made up, and its model).
+function setDevice(meta: Meta, body: any) {
+  const id = String(body?.device ?? "");
+  if (!/^[\w-]{8,64}$/.test(id)) return;
+  meta.device = id;
+  meta.device_model = String(body?.model ?? "").replace(/[^\w ,.-]/g, "").slice(0, 40) || undefined;
+  writeJson(join(spaceDir(meta.id), "meta.json"), meta);
+}
+
+// Spaces made before the app told its phone apart: their owner says which phone it is.
+async function tellDevice(meta: Meta, req: Request): Promise<Response> {
+  if (!isOwner(meta, req)) return err("only the phone that made this space can say so", 403);
+  if (!meta.device) setDevice(meta, await req.json().catch(() => ({})));
+  return json({ ok: true });
+}
+
+// The names the admins gave to phones, by the phone's number: DATA_DIR/people.json.
+const PEOPLE = join(DATA_DIR, "people.json");
+async function namePhone(device: string, req: Request): Promise<Response> {
+  const body = await req.json().catch(() => ({}));
+  const people = readJson<Record<string, string>>(PEOPLE) ?? {};
+  const name = String(body?.name ?? "").trim().slice(0, 60);
+  if (name) people[device] = name; else delete people[device];
+  writeJson(PEOPLE, people);
+  return json({ ok: true });
 }
 
 const appAllowed = (req: Request) => {
@@ -395,13 +423,14 @@ function adminList(): Response {
     }, 0)) / 2;
     return {
       id: meta.id, name: meta.name, token: meta.token, created: meta.created,
+      device: meta.device ?? null, model: meta.device_model ?? null, app: !!meta.owner_hash,
       status: getStatus(meta.id),
       clips: listClips(meta.id).map(c => ({ id: c.id, filename: c.filename, bytes: c.bytes, uploaded: c.uploaded })),
       pending: listPending(meta.id).length,
       rooms: sp?.rooms.map(r => ({ name: r.name, area: Math.round(area(r.polygon) * 10) / 10 })) ?? null,
     };
   });
-  return json({ spaces });
+  return json({ spaces, people: readJson<Record<string, string>>(PEOPLE) ?? {} });
 }
 
 // Contact form: every message is kept in DATA_DIR/messages and, when mail is set up,
@@ -469,6 +498,9 @@ async function handle(req: Request): Promise<Response> {
     return json({ ok: true });
   }
 
+  const who = path.match(/^\/api\/prints\/people\/([\w-]{8,64})$/);
+  if (who && m === "PUT") return namePhone(who[1], req);
+
   const a = path.match(/^\/(api\/)?admin\/([\w-]+)\/?$/);
   if (a && m === "GET") {
     if (!isAdmin(a[2])) return err("not found", 404);
@@ -492,6 +524,7 @@ async function handle(req: Request): Promise<Response> {
   if (sub === "" && m === "GET") return json(summary(meta));
   if (sub === "" && m === "DELETE") return deleteWhole(meta, req);
   if (sub === "/claim" && m === "POST") return claim(meta, req);
+  if (sub === "/device" && m === "POST") return tellDevice(meta, req);
   if (sub === "/status" && m === "GET") return json(getStatus(meta.id));
   if (sub === "/meta" && m === "POST") return updateMeta(meta, req);
   if (sub === "/submit" && m === "POST") return submit(meta);

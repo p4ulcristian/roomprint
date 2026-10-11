@@ -12,7 +12,10 @@
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <style>
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
-  .day { margin: 26px 0 10px; font-size: .95rem; color: var(--muted, #6b7280); font-weight: 600; }
+  .who { margin: 34px 0 12px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .who h2 { margin: 0; font-size: 1.15rem; }
+  .who button { font: inherit; font-size: .8rem; font-weight: 600; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+                border: 1px solid var(--line); background: none; color: var(--ink); box-shadow: none; }
   .space { display: flex; flex-direction: column; gap: 8px; margin: 0; color: inherit; text-decoration: none; }
   .space:hover { border-color: var(--accent); }
   .thumb { aspect-ratio: 4 / 3; background: var(--paper); border-radius: 14px; display: flex; align-items: center;
@@ -75,7 +78,7 @@
     const diff = Math.round((start(new Date()) - start(d)) / 864e5);
     if (diff === 0) return "Today";
     if (diff === 1) return "Yesterday";
-    return d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   }
 
   function card(s) {
@@ -95,7 +98,7 @@
     return `<a class="card space" href="/s/${s.token}" data-token="${s.token}" data-id="${s.id}" data-has="${s.rooms?.length ? 1 : 0}">
       ${prints ? `<button class="remove" type="button" title="Delete" aria-label="Delete">×</button>` : ""}
       <div class="thumb"><span class="muted">${free ? "Free scan" : s.rooms ? "" : "No plan yet"}</span></div>
-      <div class="row"><strong>${esc(s.name)}</strong><span class="muted small">${created.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span></div>
+      <div class="row"><strong>${esc(s.name)}</strong><span class="muted small">${dayLabel(created)}, ${created.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span></div>
       <div class="rooms">${rooms}</div>
       <div class="tags">${tags.join("")}</div>
     </a>`;
@@ -104,17 +107,31 @@
   async function load() {
     const res = await fetch(api);
     if (!res.ok) { document.getElementById("list").innerHTML = `<p class="muted">Not found.</p>`; return; }
-    const { spaces } = await res.json();
+    const { spaces, people = {} } = await res.json();
     byId = new Map(spaces.map(s => [s.id, s]));
-    const days = [];
+    // One group per phone, the one with the newest space first (the list comes newest first).
+    // The app's older spaces have no phone yet; uploads through an invite link never have one.
+    const groups = new Map();
     for (const s of spaces) {
-      const label = dayLabel(new Date(s.created));
-      if (!days.length || days.at(-1).label !== label) days.push({ label, items: [] });
-      days.at(-1).items.push(s);
+      const key = s.device ?? (s.app ? "app" : "web");
+      if (!groups.has(key)) groups.set(key, { key, device: s.device, model: s.model, items: [] });
+      groups.get(key).items.push(s);
     }
-    document.getElementById("list").innerHTML = days.map(d =>
-      `<h2 class="day">${esc(d.label)}</h2><div class="grid">${d.items.map(card).join("")}</div>`).join("")
+    const title = g => g.device
+      ? esc(people[g.device] || `Phone ${g.device.slice(0, 6)}`)
+      : g.key === "app" ? "From the app, phone not known yet" : "Uploaded through a link";
+    document.getElementById("list").innerHTML = [...groups.values()].map(g =>
+      `<div class="who"><h2>${title(g)}</h2><span class="muted small">${[g.device && people[g.device] && `phone ${esc(g.device.slice(0, 6))}`, esc(g.model),
+        `${g.items.length} space${g.items.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ")}</span>
+        ${prints && g.device ? `<button type="button" data-name="${esc(g.device)}">${people[g.device] ? "Rename" : "Name this phone"}</button>` : ""}</div>
+      <div class="grid">${g.items.map(card).join("")}</div>`).join("")
       || `<p class="muted">No spaces yet.</p>`;
+    for (const b of document.querySelectorAll("[data-name]")) b.onclick = async () => {
+      const name = prompt("Who is this phone? (name or email; empty to clear)", people[b.dataset.name] ?? "");
+      if (name === null) return;
+      await fetch(`/api/prints/people/${b.dataset.name}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) });
+      load();
+    };
 
     // Mini floor plans, drawn by the same code as the viewer's Blueprint tab.
     for (const el of document.querySelectorAll('.space[data-has="1"]')) {

@@ -35,6 +35,24 @@ struct APIError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// What tells this phone apart on the server's list of every space: a number the app makes
+/// up for itself the first time, and the phone's model. Nothing of the person.
+enum Device {
+    static let id: String = {
+        if let known = UserDefaults.standard.string(forKey: "device") { return known }
+        let made = UUID().uuidString.lowercased()
+        UserDefaults.standard.set(made, forKey: "device")
+        return made
+    }()
+
+    /// The hardware's own name for the model, such as "iPhone16,1".
+    static let model: String = {
+        var info = utsname()
+        uname(&info)
+        return withUnsafeBytes(of: &info.machine) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+    }()
+}
+
 /// The Roomprint web API (web/server.ts). Uploads go up in 8 MB chunks through Uploader.
 enum API {
     static let defaultBase = Secrets.baseURL
@@ -89,7 +107,7 @@ enum API {
         req.httpMethod = "POST"
         req.setValue("Bearer \(Secrets.appSecret)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["name": name])
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["name": name, "device": Device.id, "model": Device.model])
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200, let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -109,6 +127,13 @@ enum API {
             throw APIError(message: errorText(data, code))
         }
         return obj["owner"] as? String
+    }
+
+    /// Says which phone made a space that was made before the app told its phone apart.
+    static func tellDevice(_ s: SavedSpace) async throws {
+        let (data, code) = try await request("\(s.api)/device", method: "POST", json: ["device": Device.id, "model": Device.model],
+                                             headers: ["X-Owner-Key": s.ownerKey ?? ""])
+        guard code == 200 || code == 404 else { throw APIError(message: errorText(data, code)) }
     }
 
     /// Deletes the whole space from the server, for good.

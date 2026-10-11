@@ -21,6 +21,10 @@ export type Meta = {
   // sha256 of the owner key: whoever holds the key (the phone that made the space) may
   // delete it. The view link alone only lets people look.
   owner_hash?: string;
+  // The app's own made-up number for the phone it runs on, and the phone's model: they
+  // tell the admins' list which spaces came from one phone. Never sent to viewers.
+  device?: string;
+  device_model?: string;
 };
 export type State = "draft" | "queued" | "processing" | "done" | "failed";
 export type Status = { state: State; step: string; progress: number; error: string | null; updated: string };

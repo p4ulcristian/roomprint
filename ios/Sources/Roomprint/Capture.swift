@@ -124,7 +124,7 @@ final class CaptureController: NSObject, ObservableObject, RoomCaptureSessionDel
     }
 
     /// The recording waits while something is up over the camera (the guide, the look at
-    /// the scan, a room's name). Told on every redraw of the screen, so it cannot be missed.
+    /// the scan). Told on every redraw of the screen, so it cannot be missed.
     func hold(_ on: Bool) {
         if phase == .scanning, recorder.paused != on { recorder.paused = on }
     }
@@ -305,8 +305,6 @@ struct CaptureView: View {
     @StateObject private var ctl: CaptureController
     @State private var looking = false
     @State private var guide = false
-    @State private var naming = false
-    @State private var roomName = ""
     @State private var askClose = false
     @State private var follow = true
     @AppStorage("guideSeen") private var guideSeen = false
@@ -322,7 +320,7 @@ struct CaptureView: View {
     private var planning: Bool { ctl.scan.plan && CaptureController.canPlan }
 
     var body: some View {
-        let _ = ctl.hold(looking || guide || naming)
+        let _ = ctl.hold(looking || guide)
         ZStack(alignment: .bottom) {
             ARViewRep(view: ctl.view).ignoresSafeArea()
             if ctl.phase == .scanning { GapArrow(live: live) }
@@ -369,17 +367,6 @@ struct CaptureView: View {
         }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
         .fullScreenCover(isPresented: $looking) { review }
-        .alert("Name this room", isPresented: $naming) {
-            TextField("Kitchen, bedroom… (optional)", text: $roomName)
-            Button("Next room") {
-                let name = roomName
-                roomName = ""
-                Task { await ctl.nextRoom(name: name) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This room is closed for the floor plan and the next one starts. Keep the phone up and walk on.")
-        }
         .confirmationDialog(ctl.fresh ? "Throw this scan away?" : "Stop here?", isPresented: $askClose, titleVisibility: .visible) {
             if ctl.fresh {
                 Button("Throw it away", role: .destructive) { close() }
@@ -420,7 +407,8 @@ struct CaptureView: View {
             Text("Move slowly, about a metre from things. The mesh turns from red to blue as a surface is scanned well.")
                 .font(.callout).multilineTextAlignment(.center)
             HStack {
-                if planning { Button("Next room") { naming = true }.glassButton().disabled(ctl.closingRoom) }
+                // Rooms are not named: the plan calls them Room 1, Room 2…
+                if planning { Button("Next room") { Task { await ctl.nextRoom(name: "") } }.glassButton().disabled(ctl.closingRoom) }
                 Button("Done") { looking = true }.glassButton(prominent: true).disabled(ctl.closingRoom)
             }
         case .saving(let step):
@@ -459,9 +447,6 @@ struct CaptureView: View {
     private var review: some View {
         ModelLook(live: live) {
             VStack(spacing: 10) {
-                if planning {
-                    TextField("Name of this last room (optional)", text: $roomName).textFieldStyle(.roundedBorder)
-                }
                 Button { end(upload: true) } label: { Text("Upload").frame(maxWidth: .infinity) }.glassButton(prominent: true)
                 HStack {
                     Button { looking = false } label: { Text("Scan more").frame(maxWidth: .infinity) }.glassButton()
@@ -476,7 +461,7 @@ struct CaptureView: View {
     private func end(upload: Bool) {
         looking = false
         Task {
-            guard let kept = await ctl.finish(roomName: roomName) else { return }
+            guard let kept = await ctl.finish(roomName: "") else { return }
             if upload {
                 do {
                     try await ScanStore.upload(kept, to: space)

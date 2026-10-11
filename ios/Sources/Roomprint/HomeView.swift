@@ -3,8 +3,6 @@ import SwiftUI
 /// The spaces on this phone, and the way to a new one.
 struct HomeView: View {
     @EnvironmentObject var store: Store
-    @State private var naming = false
-    @State private var name = ""
     @State private var pasting = false
     @State private var link = ""
     @State private var busy = false
@@ -56,7 +54,7 @@ struct HomeView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                Button { naming = true } label: {
+                Button { create() } label: {
                     Label(busy ? "Creating…" : "New space", systemImage: "plus")
                         .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
                 }
@@ -64,13 +62,6 @@ struct HomeView: View {
                 .disabled(busy)
                 .padding(.horizontal, 20)
                 .padding(.bottom, 8)
-            }
-            .alert("New space", isPresented: $naming) {
-                TextField("Name, e.g. Our flat", text: $name)
-                Button("Create") { create() }
-                Button("Cancel", role: .cancel) { name = "" }
-            } message: {
-                Text("What are you scanning?")
             }
             .alert("Open an invite link", isPresented: $pasting) {
                 TextField("Paste the link", text: $link)
@@ -91,8 +82,7 @@ struct HomeView: View {
     private func create() {
         busy = true
         Task {
-            await store.create(name)
-            name = ""
+            await store.create()
             busy = false
         }
     }
