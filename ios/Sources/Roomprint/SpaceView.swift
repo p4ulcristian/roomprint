@@ -302,6 +302,7 @@ struct KeptSheet: View {
                             Text(Self.about(s)).font(.subheadline).foregroundStyle(.secondary)
                             Text(s.uploaded.map { "Uploaded \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Not uploaded yet")
                                 .font(.footnote).foregroundStyle(s.uploaded == nil ? .orange : .secondary)
+                            if let no = s.noPlan { Text(no).font(.footnote).foregroundStyle(.orange) }
                         }
                         Button { upload(s) } label: {
                             Label(busy == s.id ? "Queueing…" : s.uploaded == nil ? "Upload" : "Upload again", systemImage: "arrow.up.circle")

@@ -27,6 +27,7 @@ final class CaptureController: NSObject, ObservableObject, RoomCaptureSessionDel
 
     private var rooms: RoomCaptureSession?
     private var ending: CheckedContinuation<Void, Never>?
+    private var answered = false   // RoomPlan said how the room being closed ended
     private var walls: [(transform: simd_float4x4, size: SIMD3<Float>, opening: Bool)] = []   // of the rooms already finished
     private var lastPlan = Date.distantPast
     private var watch: Timer?
@@ -158,6 +159,7 @@ final class CaptureController: NSObject, ObservableObject, RoomCaptureSessionDel
         closingRoom = true
         defer { closingRoom = false }
         let before = scan.rooms
+        answered = false
         await withCheckedContinuation { (k: CheckedContinuation<Void, Never>) in
             ending = k
             rooms.stop(pauseARSession: false)
@@ -171,6 +173,8 @@ final class CaptureController: NSObject, ObservableObject, RoomCaptureSessionDel
         if scan.rooms > before {
             while scan.names.count < before { scan.names.append(nil) }
             scan.names.append(name.trimmingCharacters(in: .whitespaces))
+        } else if !answered {
+            scan.planNote = "RoomPlan did not answer when the room was closed"
         }
     }
 
@@ -185,17 +189,35 @@ final class CaptureController: NSObject, ObservableObject, RoomCaptureSessionDel
 
     nonisolated func captureSession(_ session: RoomCaptureSession, didEndWith data: CapturedRoomData, error: Error?) {
         Task { @MainActor in
-            // A room RoomPlan could make nothing of (an object, a corner) is simply not a room.
-            if error == nil, let room = try? await RoomBuilder(options: [.beautifyObjects]).capturedRoom(from: data),
-               !room.walls.isEmpty, let json = try? JSONEncoder().encode(room) {
-                try? json.write(to: ScanStore.room(ScanStore.dir(self.scan), self.scan.rooms))
-                self.scan.rooms += 1
-                self.walls += Self.surfaces(room)
-                self.recorder.live.plan(self.walls)
+            // A room RoomPlan could make nothing of (an object, a corner) is simply not a room,
+            // but why is kept, to be shown. A scan RoomPlan stopped with an error may still
+            // hold a room, so building it is tried either way.
+            var why: String?
+            do {
+                let room = try await RoomBuilder(options: [.beautifyObjects]).capturedRoom(from: data)
+                if room.walls.isEmpty {
+                    why = "RoomPlan found no walls"
+                } else {
+                    try JSONEncoder().encode(room).write(to: ScanStore.room(ScanStore.dir(self.scan), self.scan.rooms))
+                    self.scan.rooms += 1
+                    self.walls += Self.surfaces(room)
+                    self.recorder.live.plan(self.walls)
+                }
+            } catch {
+                why = "the room could not be built (\(Self.words(error)))"
             }
+            if let error { why = "RoomPlan stopped (\(Self.words(error)))" + (why == nil ? ", the room so far was kept" : "") }
+            self.scan.planNote = why
+            self.answered = true
             self.ending?.resume()
             self.ending = nil
         }
+    }
+
+    /// An error as RoomPlan names it, with what it says about it.
+    nonisolated private static func words(_ error: Error) -> String {
+        let name = String(describing: error), said = error.localizedDescription
+        return said.isEmpty || said == name ? name : "\(name): \(said)"
     }
 
     nonisolated private static func surfaces(_ room: CapturedRoom) -> [(transform: simd_float4x4, size: SIMD3<Float>, opening: Bool)] {
@@ -391,6 +413,9 @@ struct CaptureView: View {
                 .font(.caption.weight(.medium)).monospacedDigit()
                 // While the scan guide is being got right: what the phone is really doing.
                 Text("\(ctl.debug) · \(live.debug)").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                if planning, let note = ctl.scan.planNote {
+                    Text("Floor plan: \(note)").font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center)
+                }
             }
             Text("Move slowly, about a metre from things. The mesh turns from red to blue as a surface is scanned well.")
                 .font(.callout).multilineTextAlignment(.center)
@@ -463,6 +488,11 @@ struct CaptureView: View {
                 }
             }
             onDone()
+            // Said before the screen goes, or the missing plan is found out only on the server.
+            if planning, let no = kept.noPlan {
+                ctl.fail("The 3D model is \(upload ? "on its way" : "kept on this phone"), without a floor plan. \(no)")
+                return
+            }
             dismiss()
         }
     }

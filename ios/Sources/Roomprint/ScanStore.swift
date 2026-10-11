@@ -23,6 +23,15 @@ struct KeptScan: Codable, Identifiable, Hashable {
     /// Times it was scanned: 1, and one more for every time it was continued.
     var segments: Int = 0
     var uploaded: Date?
+    /// Why the last room RoomPlan worked on gave no floor plan, in RoomPlan's own words.
+    var planNote: String?
+
+    /// For the screen: why this scan has no floor plan, or nil when it has one.
+    var noPlan: String? {
+        if rooms > 0 { return nil }
+        if !plan { return "Scanned without a floor plan." }
+        return "No floor plan: \(planNote ?? "RoomPlan gave no room")."
+    }
 }
 
 /// The scans kept on this phone, one folder each under Application Support/Scans:
@@ -115,7 +124,8 @@ enum ScanStore {
             if (try? structure.export(to: usdz)) != nil { files.append(usdz) }
         } else {
             let note = tmp.appendingPathComponent("scan-\(stamp).freescan")
-            try JSONSerialization.data(withJSONObject: ["version": 1, "seconds": Int(s.seconds)]).write(to: note)
+            // The reason goes along, so the server's files say why there is no plan.
+            try JSONSerialization.data(withJSONObject: ["version": 1, "seconds": Int(s.seconds), "plan": s.plan, "why": s.planNote ?? ""]).write(to: note)
             files.append(note)
         }
 
