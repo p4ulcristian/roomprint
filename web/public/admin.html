@@ -12,8 +12,10 @@
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <style>
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
-  .who { margin: 34px 0 12px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-  .who h2 { margin: 0; font-size: 1.15rem; }
+  .day { margin: 40px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; gap: 10px; }
+  .day h2 { margin: 0; font-size: 1.35rem; }
+  .who { margin: 18px 0 10px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .who h3 { margin: 0; font-size: 1rem; }
   .who button { font: inherit; font-size: .8rem; font-weight: 600; padding: 4px 10px; border-radius: 999px; cursor: pointer;
                 border: 1px solid var(--line); background: none; color: var(--ink); box-shadow: none; }
   .space { display: flex; flex-direction: column; gap: 8px; margin: 0; color: inherit; text-decoration: none; }
@@ -68,7 +70,7 @@
   import { renderBlueprint } from "/static/blueprint.js";
 
   const parts = location.pathname.split("/").filter(Boolean);
-  const prints = parts[0] === "prints";   // removing is only offered behind the admins login
+  const prints = parts[0] === "prints";   // removing is only offered behind the team login
   const api = prints ? "/api/prints" : `/api/admin/${parts.pop()}`;
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const VIDEO = /\.(mov|mp4|m4v|webm|3gp|mkv)$/i;
@@ -98,7 +100,7 @@
     return `<a class="card space" href="/s/${s.token}" data-token="${s.token}" data-id="${s.id}" data-has="${s.rooms?.length ? 1 : 0}">
       ${prints ? `<button class="remove" type="button" title="Delete" aria-label="Delete">×</button>` : ""}
       <div class="thumb"><span class="muted">${free ? "Free scan" : s.rooms ? "" : "No plan yet"}</span></div>
-      <div class="row"><strong>${esc(s.name)}</strong><span class="muted small">${dayLabel(created)}, ${created.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span></div>
+      <div class="row"><strong>${esc(s.name)}</strong><span class="muted small">${created.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span></div>
       <div class="rooms">${rooms}</div>
       <div class="tags">${tags.join("")}</div>
     </a>`;
@@ -109,22 +111,30 @@
     if (!res.ok) { document.getElementById("list").innerHTML = `<p class="muted">Not found.</p>`; return; }
     const { spaces, people = {} } = await res.json();
     byId = new Map(spaces.map(s => [s.id, s]));
-    // One group per phone, the one with the newest space first (the list comes newest first).
-    // The app's older spaces have no phone yet; uploads through an invite link never have one.
-    const groups = new Map();
+    // One group per day, newest first (the list comes newest first), and in a day one group
+    // per phone. The app's older spaces have no phone yet; uploads through an invite link
+    // never have one.
+    const days = new Map();
     for (const s of spaces) {
-      const key = s.device ?? (s.app ? "app" : "web");
+      const d = new Date(s.created), day = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      if (!days.has(day)) days.set(day, { date: d, count: 0, groups: new Map() });
+      const groups = days.get(day).groups, key = s.device ?? (s.app ? "app" : "web");
       if (!groups.has(key)) groups.set(key, { key, device: s.device, model: s.model, items: [] });
       groups.get(key).items.push(s);
+      days.get(day).count++;
     }
+    const count = n => `${n} space${n === 1 ? "" : "s"}`;
     const title = g => g.device
       ? esc(people[g.device] || `Phone ${g.device.slice(0, 6)}`)
       : g.key === "app" ? "From the app, phone not known yet" : "Uploaded through a link";
-    document.getElementById("list").innerHTML = [...groups.values()].map(g =>
-      `<div class="who"><h2>${title(g)}</h2><span class="muted small">${[g.device && people[g.device] && `phone ${esc(g.device.slice(0, 6))}`, esc(g.model),
-        `${g.items.length} space${g.items.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ")}</span>
+    const group = g =>
+      `<div class="who"><h3>${title(g)}</h3><span class="muted small">${[g.device && people[g.device] && `phone ${esc(g.device.slice(0, 6))}`, esc(g.model),
+        count(g.items.length)].filter(Boolean).join(" · ")}</span>
         ${prints && g.device ? `<button type="button" data-name="${esc(g.device)}">${people[g.device] ? "Rename" : "Name this phone"}</button>` : ""}</div>
-      <div class="grid">${g.items.map(card).join("")}</div>`).join("")
+      <div class="grid">${g.items.map(card).join("")}</div>`;
+    document.getElementById("list").innerHTML = [...days.values()].map(d =>
+      `<div class="day"><h2>${dayLabel(d.date)}</h2><span class="muted small">${count(d.count)}</span></div>
+      ${[...d.groups.values()].map(group).join("")}`).join("")
       || `<p class="muted">No spaces yet.</p>`;
     for (const b of document.querySelectorAll("[data-name]")) b.onclick = async () => {
       const name = prompt("Who is this phone? (name or email; empty to clear)", people[b.dataset.name] ?? "");

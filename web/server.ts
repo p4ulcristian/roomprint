@@ -4,7 +4,7 @@
 //
 // Pages:   /  about Roomprint, TestFlight, contact form (POST /api/contact)
 //          /u/<token>  upload (phone)      /s/<token>  viewer
-//          /prints               every space (the gate requires an admin login)
+//          /prints               every space (the gate requires a login in the team group)
 //          DELETE /api/prints/<id>  delete a space for good
 //          /admin/<ADMIN_TOKEN>  every space, newest first (GET /api/admin/<ADMIN_TOKEN>)
 // API:     POST   /api/spaces  {name}  (Bearer APP_SECRET, the iOS app) -> {token, name}
@@ -486,7 +486,7 @@ async function handle(req: Request): Promise<Response> {
   if (path === "/api/contact" && m === "POST") return contact(req);
   if (path.startsWith("/static/")) return staticFile(path) ?? err("not found", 404);
 
-  // Every space, for admins: the gate puts /prints behind the admins login.
+  // Every space, for the team: the gate puts /prints behind the team group's login.
   if ((path === "/prints" || path === "/prints/") && m === "GET") return page("admin.html");
   if (path === "/api/prints" && m === "GET") return adminList();
   const del = path.match(/^\/api\/prints\/(sp_[0-9a-f]{8})$/);
