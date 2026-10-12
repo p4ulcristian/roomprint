@@ -36,7 +36,7 @@ struct APIError: LocalizedError {
 }
 
 /// What tells this phone apart on the server's list of every space: a number the app makes
-/// up for itself the first time, and the phone's model. Nothing of the person.
+/// up for itself the first time, and the phone's model. The list groups by the number.
 enum Device {
     static let id: String = {
         if let known = UserDefaults.standard.string(forKey: "device") { return known }
@@ -51,6 +51,21 @@ enum Device {
         uname(&info)
         return withUnsafeBytes(of: &info.machine) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
     }()
+}
+
+/// The name the person picked on the app's first start. Any name will do: it is only what
+/// the server's list of every space calls this phone, so people are easy to tell apart.
+enum Person {
+    static let limit = 40
+
+    static var name: String {
+        get { UserDefaults.standard.string(forKey: "person") ?? "" }
+        set { UserDefaults.standard.set(clean(newValue), forKey: "person") }
+    }
+
+    static func clean(_ s: String) -> String {
+        String(s.trimmingCharacters(in: .whitespacesAndNewlines).prefix(limit)).trimmingCharacters(in: .whitespaces)
+    }
 }
 
 /// The Roomprint web API (web/server.ts). Uploads go up in 8 MB chunks through Uploader.
@@ -107,7 +122,7 @@ enum API {
         req.httpMethod = "POST"
         req.setValue("Bearer \(Secrets.appSecret)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["name": name, "device": Device.id, "model": Device.model])
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["name": name, "device": Device.id, "model": Device.model, "person": Person.name])
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200, let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -129,9 +144,11 @@ enum API {
         return obj["owner"] as? String
     }
 
-    /// Says which phone made a space that was made before the app told its phone apart.
+    /// Says which phone made a space and what its person is called: for spaces made before
+    /// the app said so itself, and for every space when the name changes.
     static func tellDevice(_ s: SavedSpace) async throws {
-        let (data, code) = try await request("\(s.api)/device", method: "POST", json: ["device": Device.id, "model": Device.model],
+        let (data, code) = try await request("\(s.api)/device", method: "POST",
+                                             json: ["device": Device.id, "model": Device.model, "person": Person.name],
                                              headers: ["X-Owner-Key": s.ownerKey ?? ""])
         guard code == 200 || code == 404 else { throw APIError(message: errorText(data, code)) }
     }

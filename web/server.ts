@@ -7,10 +7,11 @@
 //          /prints               every space (the gate requires a login in the team group)
 //          DELETE /api/prints/<id>  delete a space for good
 //          /admin/<ADMIN_TOKEN>  every space, newest first (GET /api/admin/<ADMIN_TOKEN>)
-// API:     POST   /api/spaces  {name}  (Bearer APP_SECRET, the iOS app) -> {token, name}
+// API:     POST   /api/spaces  {name, device?, model?, person?}  (Bearer APP_SECRET, the iOS app) -> {token, name, owner}
 //          GET    /api/s/<token>                     meta, status, clips, files present
 //          DELETE /api/s/<token>                     delete the space for good (X-Owner-Key)
 //          POST   /api/s/<token>/claim               owner key for an app space made before keys (app secret)
+//          POST   /api/s/<token>/device              {device?, model?, person?}  which phone and whose name (X-Owner-Key)
 //          POST   /api/s/<token>/meta                {capture?, wall_length_m?, note?}
 //          POST   /api/s/<token>/clips               {filename, bytes, room_name?} -> {id, received}
 //          GET    /api/s/<token>/clips/<clip>        {id, received, bytes, complete}
@@ -76,7 +77,7 @@ function staticFile(path: string): Response | null {
 
 function summary(meta: Meta) {
   const dir = spaceDir(meta.id);
-  const { token: _t, owner_hash: _o, device: _d, device_model: _m, ...pub } = meta;
+  const { token: _t, owner_hash: _o, device: _d, device_model: _m, person: _p, ...pub } = meta;
   return {
     meta: pub,
     status: getStatus(meta.id),
@@ -342,23 +343,30 @@ async function newSpace(req: Request): Promise<Response> {
   return json({ token: meta.token, name: meta.name, owner: setOwner(meta) });
 }
 
-// Which phone a space came from, as the app tells it (a number it made up, and its model).
+// Which phone a space came from, as the app tells it (a number it made up, and its model),
+// and the name its person picked in the app. The phone is said once and stays; the name
+// follows whatever the app says last, so a changed name reaches the older spaces too.
 function setDevice(meta: Meta, body: any) {
   const id = String(body?.device ?? "");
-  if (!/^[\w-]{8,64}$/.test(id)) return;
-  meta.device = id;
-  meta.device_model = String(body?.model ?? "").replace(/[^\w ,.-]/g, "").slice(0, 40) || undefined;
+  if (!meta.device && /^[\w-]{8,64}$/.test(id)) {
+    meta.device = id;
+    meta.device_model = String(body?.model ?? "").replace(/[^\w ,.-]/g, "").slice(0, 40) || undefined;
+  }
+  const person = [...String(body?.person ?? "").replace(/\p{C}/gu, "").trim()].slice(0, 40).join("").trim();
+  if (person) meta.person = person;
   writeJson(join(spaceDir(meta.id), "meta.json"), meta);
 }
 
-// Spaces made before the app told its phone apart: their owner says which phone it is.
+// The owner of a space says which phone it is (spaces made before the app told its phone
+// apart) and what its person is called (spaces made before the app asked, or a new name).
 async function tellDevice(meta: Meta, req: Request): Promise<Response> {
   if (!isOwner(meta, req)) return err("only the phone that made this space can say so", 403);
-  if (!meta.device) setDevice(meta, await req.json().catch(() => ({})));
+  setDevice(meta, await req.json().catch(() => ({})));
   return json({ ok: true });
 }
 
-// The names the admins gave to phones, by the phone's number: DATA_DIR/people.json.
+// The names the team gave to phones, by the phone's number: DATA_DIR/people.json. On the
+// list such a name goes before the one the person picked in the app.
 const PEOPLE = join(DATA_DIR, "people.json");
 async function namePhone(device: string, req: Request): Promise<Response> {
   const body = await req.json().catch(() => ({}));
@@ -423,7 +431,7 @@ function adminList(): Response {
     }, 0)) / 2;
     return {
       id: meta.id, name: meta.name, token: meta.token, created: meta.created,
-      device: meta.device ?? null, model: meta.device_model ?? null, app: !!meta.owner_hash,
+      device: meta.device ?? null, model: meta.device_model ?? null, person: meta.person ?? null, app: !!meta.owner_hash,
       status: getStatus(meta.id),
       clips: listClips(meta.id).map(c => ({ id: c.id, filename: c.filename, bytes: c.bytes, uploaded: c.uploaded })),
       pending: listPending(meta.id).length,

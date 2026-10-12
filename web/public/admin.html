@@ -112,23 +112,27 @@
     const { spaces, people = {} } = await res.json();
     byId = new Map(spaces.map(s => [s.id, s]));
     // One group per day, newest first (the list comes newest first), and in a day one group
-    // per phone. The app's older spaces have no phone yet; uploads through an invite link
+    // per phone. A phone is called by the name the team gave it, or else the name its person
+    // picked in the app (the newest one, if it changed); two phones with the same name stay
+    // two groups. The app's older spaces have no phone yet; uploads through an invite link
     // never have one.
     const days = new Map();
     for (const s of spaces) {
       const d = new Date(s.created), day = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
       if (!days.has(day)) days.set(day, { date: d, count: 0, groups: new Map() });
       const groups = days.get(day).groups, key = s.device ?? (s.app ? "app" : "web");
-      if (!groups.has(key)) groups.set(key, { key, device: s.device, model: s.model, items: [] });
+      if (!groups.has(key)) groups.set(key, { key, device: s.device, model: s.model, person: null, items: [] });
       groups.get(key).items.push(s);
+      groups.get(key).person ??= s.person;
       days.get(day).count++;
     }
     const count = n => `${n} space${n === 1 ? "" : "s"}`;
     const title = g => g.device
-      ? esc(people[g.device] || `Phone ${g.device.slice(0, 6)}`)
+      ? esc(people[g.device] || g.person || `Phone ${g.device.slice(0, 6)}`)
       : g.key === "app" ? "From the app, phone not known yet" : "Uploaded through a link";
     const group = g =>
-      `<div class="who"><h3>${title(g)}</h3><span class="muted small">${[g.device && people[g.device] && `phone ${esc(g.device.slice(0, 6))}`, esc(g.model),
+      `<div class="who"><h3>${title(g)}</h3><span class="muted small">${[g.device && people[g.device] && g.person && g.person !== people[g.device] && `“${esc(g.person)}” in the app`,
+        g.device && (people[g.device] || g.person) && `phone ${esc(g.device.slice(0, 6))}`, esc(g.model),
         count(g.items.length)].filter(Boolean).join(" · ")}</span>
         ${prints && g.device ? `<button type="button" data-name="${esc(g.device)}">${people[g.device] ? "Rename" : "Name this phone"}</button>` : ""}</div>
       <div class="grid">${g.items.map(card).join("")}</div>`;
@@ -137,7 +141,7 @@
       ${[...d.groups.values()].map(group).join("")}`).join("")
       || `<p class="muted">No spaces yet.</p>`;
     for (const b of document.querySelectorAll("[data-name]")) b.onclick = async () => {
-      const name = prompt("Who is this phone? (name or email; empty to clear)", people[b.dataset.name] ?? "");
+      const name = prompt("Who is this phone? (name or email; empty to go back to the name picked in the app)", people[b.dataset.name] ?? "");
       if (name === null) return;
       await fetch(`/api/prints/people/${b.dataset.name}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) });
       load();

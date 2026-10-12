@@ -7,6 +7,7 @@ struct HomeView: View {
     @State private var link = ""
     @State private var busy = false
     @State private var toDelete: SavedSpace?
+    @State private var naming = false
 
     var body: some View {
         NavigationStack(path: $store.path) {
@@ -47,6 +48,7 @@ struct HomeView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button { pasting = true } label: { Label("Open an invite link", systemImage: "link") }
+                        Button { naming = true } label: { Label("Your name: \(store.person)", systemImage: "person") }
                         Link(destination: URL(string: "\(API.defaultBase)/privacy")!) { Label("Privacy", systemImage: "hand.raised") }
                     } label: {
                         Image(systemName: "ellipsis")
@@ -63,6 +65,7 @@ struct HomeView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 8)
             }
+            .sheet(isPresented: $naming) { NameView(changing: true) }
             .alert("Open an invite link", isPresented: $pasting) {
                 TextField("Paste the link", text: $link)
                     .textInputAutocapitalization(.never)

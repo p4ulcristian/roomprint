@@ -25,6 +25,9 @@ export type Meta = {
   // tell the admins' list which spaces came from one phone. Never sent to viewers.
   device?: string;
   device_model?: string;
+  // The name the person picked on the app's first start (any name, not checked). It is
+  // what the list calls the phone; the list still groups by `device`. Never sent to viewers.
+  person?: string;
 };
 export type State = "draft" | "queued" | "processing" | "done" | "failed";
 export type Status = { state: State; step: string; progress: number; error: string | null; updated: string };

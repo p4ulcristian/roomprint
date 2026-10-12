@@ -10,11 +10,14 @@ struct RoomprintApp: App {
 
     var body: some Scene {
         WindowGroup {
-            HomeView()
-                .environmentObject(store)
-                .environmentObject(uploader)
-                // roomprint://u/<token>, from the "Open in the app" button on the upload page
-                .onOpenURL { url in Task { await store.add(url.absoluteString) } }
+            Group {
+                // The first start asks for a name before anything else; there is no way round it.
+                if store.person.isEmpty { NameView() } else { HomeView() }
+            }
+            .environmentObject(store)
+            .environmentObject(uploader)
+            // roomprint://u/<token>, from the "Open in the app" button on the upload page
+            .onOpenURL { url in Task { await store.add(url.absoluteString) } }
         }
         // Uploads queued while offline, or cut off by a force quit, go on from here.
         .onChange(of: phase) { _, now in
@@ -29,6 +32,8 @@ final class Store: ObservableObject {
     @Published var spaces: [SavedSpace] = []
     @Published var path: [SavedSpace] = []
     @Published var error: String?
+    /// The name picked on the first start; empty until then.
+    @Published private(set) var person = Person.name
     private let key = "spaces"
 
     init() {
@@ -68,6 +73,7 @@ final class Store: ObservableObject {
             let s = try await API.createSpace(name: "\(day) · \(last + 1)")
             spaces.insert(s, at: 0)
             save()
+            told(s.token, as: person)
             error = nil
             path = [s]
         } catch {
@@ -108,15 +114,32 @@ final class Store: ObservableObject {
         }
     }
 
-    /// Spaces this phone made before the app told its phone apart are marked as its own, once.
+    /// The name from the first start, or a new one from the menu. The spaces already made
+    /// are told about it too.
+    func setPerson(_ name: String) {
+        Person.name = name
+        person = Person.name
+        Task { await tellDevice() }
+    }
+
+    /// Every space this phone made is marked on the server as this phone's, under the
+    /// person's name: once for each space, and again when the name changes.
     func tellDevice() async {
-        let key = "deviceTold"
-        var told = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
-        for s in spaces where s.ownerKey != nil && s.base == API.defaultBase && !told.contains(s.token) {
+        let name = person
+        guard !name.isEmpty else { return }
+        let done = UserDefaults.standard.dictionary(forKey: toldKey) as? [String: String] ?? [:]
+        for s in spaces where s.ownerKey != nil && s.base == API.defaultBase && done[s.token] != name {
             guard (try? await API.tellDevice(s)) != nil else { continue }
-            told.insert(s.token)
+            told(s.token, as: name)
         }
-        UserDefaults.standard.set(Array(told), forKey: key)
+    }
+
+    /// Which name the server has for each space, by the space's token.
+    private let toldKey = "personTold"
+    private func told(_ token: String, as name: String) {
+        var done = UserDefaults.standard.dictionary(forKey: toldKey) as? [String: String] ?? [:]
+        done[token] = name
+        UserDefaults.standard.set(done, forKey: toldKey)
     }
 
     private func save() {

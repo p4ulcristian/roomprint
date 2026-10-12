@@ -93,7 +93,10 @@ scan's depth and poses go on in the same files and its videos are joined before 
 so the server sees one scan. The space's page in the app is the
 web viewer in a web view; exports and files tapped there are downloaded by the app and
 handed to the share sheet (a USDZ opens in AR Quick Look). The interface uses Liquid
-Glass on iOS 26 and the blur material on iOS 17 and 18. Uploads run in an
+Glass on iOS 26 and the blur material on iOS 17 and 18. The first start asks for a
+name, any name (`NameView.swift`); it goes with every space the phone makes, so the
+list of every space (`/prints`) can call each phone by it, while the list still groups
+by a number the app made up for itself. Uploads run in an
 iOS background session (`Uploader.swift`), one task per 8 MB chunk, so they finish
 with the app closed; the server takes chunks in any order and starts on the scan as
 soon as its `.roomplan` file is complete. Built from Linux
