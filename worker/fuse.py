@@ -83,6 +83,8 @@ def fuse(path: Path, frame: dict, out: Path, progress=lambda p: None) -> dict:
         jh, jw = rgb.shape[:2]
         depth = depth.copy()
         depth[(conf < MIN_CONF) | ~np.isfinite(depth) | (depth > MAX_DEPTH)] = 0
+        if not depth.any():
+            continue  # nothing measured (lens covered, or all of it too far): Open3D refuses such a frame
         depth = cv2.resize(depth, (jw, jh), interpolation=cv2.INTER_NEAREST)
         K = np.array(h["K"], float).reshape(3, 3) * (jw / h["iw"])
         K[2, 2] = 1.0
